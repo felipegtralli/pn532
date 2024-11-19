@@ -47,25 +47,164 @@
 
 #define PN532_MIFARE_ISO14443A 0x00
 
+/**
+ * @brief PN532 protocol type
+ * 
+ */
+typedef enum {
+    PN532_UART_PROTOCOL,
+    PN532_I2C_PROTOCOL,
+    PN532_SPI_PROTOCOL,
+    PN532_MAX_PROTOCOL,
+} pn532_protocol_t;
+
+/**
+ * @brief PN532 handle type
+ * 
+ */
 typedef struct pn532_t* pn532_handle_t;
 
+/**
+ * @brief PN532 uart configuration
+ * 
+ */
 typedef struct {
-    gpio_num_t tx;
-    gpio_num_t rx;
-    uart_port_t uart_port;
-    uint32_t baud_rate;
+    gpio_num_t tx; // UART TX pin
+    gpio_num_t rx; // UART RX pin
+    uart_port_t uart_port; // UART port number. UART_NUM_0 ~ (UART_NUM_MAX - 1)
+    uint32_t baud_rate; // UART baud rate
+} pn532_uart_config_t;
+
+/**
+ * @brief PN532 i2c configuration
+ * 
+ */
+typedef struct {
+    // todo 
+} pn532_i2c_config_t;
+
+/**
+ * @brief PN532 spi configuration
+ * 
+ */
+typedef struct {
+    // todo
+} pn532_spi_config_t;
+
+/**
+ * @brief PN532 configuration
+ * 
+ */
+typedef struct {
+    pn532_protocol_t protocol;
+    union {
+        pn532_uart_config_t uart;
+        pn532_i2c_config_t i2c;
+        pn532_spi_config_t spi;
+    };
 } pn532_config_t;
 
+/**
+ * @brief Initialize PN532 device.
+ * 
+ * Sets up the PN532 device with the given configuration.
+ * (UART, I2C, or SPI) ** Only UART is implemented **
+ * 
+ * @param[out] pn532_handle Pointer to the PN532 handle.
+ * @param[in] config Configuration settings for the PN532 device.
+ * 
+ * @return 
+ *  - ESP_OK on success.
+ *  - ESP_ERR_INVALID_ARG if the configuration is invalid.
+ *  - ESP_ERR_NO_MEM if memory allocation failed.
+ */
 esp_err_t pn532_init(pn532_handle_t* pn532_handle, const pn532_config_t* config);
 
+/**
+ * @brief Free PN532 device.
+ * 
+ * Frees the resources used by the PN532 device.
+ * 
+ * @param[in] pn532_handle PN532 handle.
+ * 
+ * @return 
+ *  - ESP_OK on success.
+ *  - ESP_ERR_INVALID_ARG if the handle is invalid.
+ */
 esp_err_t pn532_free(pn532_handle_t pn532_handle);
 
+/**
+ * @brief Start PN532 device.
+ * 
+ * Sends a wakeup command to the PN532 and checks the acknowledgment.
+ * 
+ * @param[in] pn532_handle PN532 handle.
+ * 
+ * @return
+ * - ESP_OK on success.
+ * - ESP_ERR_INVALID_ARG if the handle is invalid.
+ * - ESP_FAIL if the acknowledgment check failed.
+ */
 esp_err_t pn532_start(pn532_handle_t pn532_handle);
 
+/**
+ * @brief Send command to PN532 and check acknowledgment.
+ * 
+ * Writes a command to the PN532 and checks the acknowledgment.
+ * 
+ * @param[in] pn532_handle PN532 handle.
+ * @param[in] command Pointer to the command buffer.
+ * @param[in] command_len Length of the command buffer.
+ * 
+ * @return
+ * - ESP_OK on success.
+ * - ESP_ERR_INVALID_ARG if the handle or command is invalid.
+ * - ESP_FAIL if the acknowledgment check failed.
+ */
 esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t* command, uint8_t command_len);
 
+/**
+ * @brief Get PN532 firmware version.
+ * 
+ * Sends a firmware version request to the PN532 and reads the version information.
+ * 
+ * @param[in] pn532_handle PN532 handle.
+ * @param[out] version Pointer to the version buffer (buffer MUST have atleast 4 bytes).
+ * 
+ * @return
+ * - ESP_OK on success.
+ * - ESP_ERR_INVALID_ARG if the handle or version is invalid.
+ * - ESP_FAIL if the firmware version check failed.
+ */
 esp_err_t pn532_get_firmware_version(pn532_handle_t pn532_handle, uint8_t* version);
 
+/**
+ * @brief Configure PN532 in SAM (Security Access Module) mode.
+ * 
+ * Configures the PN532 in SAM mode with IRQ and a timeout of 1s.
+ * 
+ * @param[in] pn532_handle PN532 handle.
+ * 
+ * @return
+ * - ESP_OK on success.
+ * - ESP_ERR_INVALID_ARG if the handle is invalid.
+ * - ESP_FAIL if the SAM configuration check failed.
+ */
 esp_err_t pn532_SAM_configuration(pn532_handle_t pn532_handle);
 
+/**
+ * @brief Read UID of passive target.
+ * 
+ * Detects a passive target and reads its UID
+ * 
+ * @param[in] pn532_handle PN532 handle.
+ * @param[in] card_baud_rate Baud rate of the card (e.g., ISO14443A).
+ * @param[out] uid Buffer to store the UID.
+ * @param[out] uid_len Pointer to the UID length.
+ * 
+ * @return
+ * - ESP_OK on success.
+ * - ESP_ERR_INVALID_ARG if the handle or UID buffer is invalid.
+ * - ESP_FAIL if target detection or acknowledgment failed.
+ */
 esp_err_t pn532_read_passive_target_id(pn532_handle_t pn532_handle, uint8_t card_baud_rate, uint8_t* uid, size_t* uid_len);
