@@ -1,0 +1,27 @@
+menu "Example Configuration"
+
+    config UART_TX_GPIO_PIN
+        int "TX pin"
+        default 17
+        help
+            Select the TX pin for UART.
+    
+    config UART_RX_GPIO_PIN
+        int "RX pin"
+        default 16
+        help
+            Select the RX pin for UART.
+
+    config UART_PORT
+        int "UART port"
+        default 0
+        help
+            Select the UART port.
+
+    config UART_BAUD_RATE
+        int "Baud rate"
+        default 115200
+        help
+            Select the baud rate for UART.
+    
+endmenu
