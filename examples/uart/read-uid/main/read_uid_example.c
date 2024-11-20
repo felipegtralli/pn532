@@ -28,6 +28,7 @@ void example_task(void* pvParameters) {
     ESP_LOGI(TAG, "Firmware version %02X.%02X\n", version[1], version[2]);
 
     ESP_ERROR_CHECK(pn532_SAM_configuration(pn532));
+    ESP_ERROR_CHECK(pn532_set_passive_activation_retries(pn532, 0x01)); // 1 retry
 
     uint8_t uid[10] = {0};
     size_t uid_len = sizeof(uid);
@@ -38,10 +39,15 @@ void example_task(void* pvParameters) {
             ESP_LOG_BUFFER_HEX_LEVEL(TAG, uid, uid_len, ESP_LOG_INFO);
 
             fail_count = 0;
-        } else {
-            if(++fail_count > MAX_READING_FAIL) {
+        } else if(err == ESP_ERR_NOT_FOUND) {
+            if(++fail_count >= MAX_READING_FAIL) {
+                ESP_LOGE(TAG, "fail count exceeded limit");
                 break;
-            }            
+            }
+            ESP_LOGD(TAG, "fail count: %d", fail_count);
+        } else {
+            ESP_LOGE(TAG, "failed to read UID");
+            break;
         }
 
         vTaskDelay(1000 / portTICK_PERIOD_MS);
