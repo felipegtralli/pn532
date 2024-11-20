@@ -109,7 +109,7 @@ esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t* com
 
     if(memcmp(response, pn532_ack, sizeof(pn532_ack)) != 0) {
         ESP_LOGE(TAG, "failed to check ack");
-        return ESP_FAIL;
+        return ESP_ERR_INVALID_RESPONSE;
     }
 
     return ESP_OK;
@@ -137,7 +137,7 @@ esp_err_t pn532_get_firmware_version(pn532_handle_t pn532_handle, uint8_t* versi
 
     if(memcmp(response, pn532_firmwareversion, sizeof(pn532_firmwareversion)) != 0) {
         ESP_LOGE(TAG, "failed to check firmware version");
-        return ESP_FAIL;
+        return ESP_ERR_INVALID_RESPONSE;
     }
 
     version[0] = response[7]; // IC
@@ -182,6 +182,34 @@ esp_err_t pn532_SAM_configuration(pn532_handle_t pn532_handle) {
     return ESP_OK;
 }
 
+esp_err_t pn532_set_passive_activation_retries(pn532_handle_t pn532_handle, uint8_t max_retries) {
+    if(!pn532_handle) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    pn532_t* pn532 = (pn532_t*) pn532_handle;
+
+    uint8_t command[] = {
+        PN532_COMMAND_RFCONFIGURATION,
+        0x05, // configuration item
+        0xFF, // MxRtyATR (default 0xFF)
+        0x01, // MxRtyPSL (default 0x01)
+        max_retries,
+    };
+
+    #ifdef PN532_DEBUG
+        ESP_LOGD(TAG, "setting passive activation retries: %02X", max_retries);
+    #endif
+
+    esp_err_t err = pn532_send_command_check_ack(pn532, command, sizeof(command));
+    if(err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to set passive activation retries");
+        return err;
+    }
+
+    return ESP_OK;
+}   
+
 esp_err_t pn532_read_passive_target_id(pn532_handle_t pn532_handle, uint8_t card_baud_rate, uint8_t* uid, size_t* uid_len) {
     if(!pn532_handle || !uid || !uid_len) {
         return ESP_ERR_INVALID_ARG;
@@ -207,9 +235,9 @@ esp_err_t pn532_read_passive_target_id(pn532_handle_t pn532_handle, uint8_t card
         return err;
     }
 
-    if(response[7] != 1) {
-        ESP_LOGE(TAG, "failed to read passive target id");
-        return ESP_FAIL;
+    if(!response[7]) {
+        ESP_LOGW(TAG, "no card detected");
+        return ESP_ERR_NOT_FOUND;
     }
 
     *uid_len = response[12];

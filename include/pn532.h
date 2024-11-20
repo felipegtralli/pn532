@@ -117,6 +117,7 @@ typedef struct {
  *  - ESP_OK on success.
  *  - ESP_ERR_INVALID_ARG if the configuration is invalid.
  *  - ESP_ERR_NO_MEM if memory allocation failed.
+ *  - Other error codes from the protocol-specific initialization functions.
  */
 esp_err_t pn532_init(pn532_handle_t* pn532_handle, const pn532_config_t* config);
 
@@ -130,6 +131,7 @@ esp_err_t pn532_init(pn532_handle_t* pn532_handle, const pn532_config_t* config)
  * @return 
  *  - ESP_OK on success.
  *  - ESP_ERR_INVALID_ARG if the handle is invalid.
+ *  - Other error codes from the protocol-specific free function.
  */
 esp_err_t pn532_free(pn532_handle_t pn532_handle);
 
@@ -143,7 +145,7 @@ esp_err_t pn532_free(pn532_handle_t pn532_handle);
  * @return
  * - ESP_OK on success.
  * - ESP_ERR_INVALID_ARG if the handle is invalid.
- * - ESP_FAIL if the acknowledgment check failed.
+ * - ESP_ERR_INVALID_RESPONSE if the acknowledgment check failed.
  */
 esp_err_t pn532_start(pn532_handle_t pn532_handle);
 
@@ -159,7 +161,8 @@ esp_err_t pn532_start(pn532_handle_t pn532_handle);
  * @return
  * - ESP_OK on success.
  * - ESP_ERR_INVALID_ARG if the handle or command is invalid.
- * - ESP_FAIL if the acknowledgment check failed.
+ * - ESP_ERR_INVALID_RESPONSE if the acknowledgment is invalid.
+ * - Other error codes from write and read functions.
  */
 esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t* command, uint8_t command_len);
 
@@ -174,7 +177,7 @@ esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t* com
  * @return
  * - ESP_OK on success.
  * - ESP_ERR_INVALID_ARG if the handle or version is invalid.
- * - ESP_FAIL if the firmware version check failed.
+ * - ESP_ERR_INVALID_RESPONSE if the firmware version check or ackowledgment failed.
  */
 esp_err_t pn532_get_firmware_version(pn532_handle_t pn532_handle, uint8_t* version);
 
@@ -188,9 +191,24 @@ esp_err_t pn532_get_firmware_version(pn532_handle_t pn532_handle, uint8_t* versi
  * @return
  * - ESP_OK on success.
  * - ESP_ERR_INVALID_ARG if the handle is invalid.
- * - ESP_FAIL if the SAM configuration check failed.
+ * - ESP_ERR_INVALID_RESPONSE if the SAM configuration check or ackowledgment failed.
  */
 esp_err_t pn532_SAM_configuration(pn532_handle_t pn532_handle);
+
+/**
+ * @brief Set passive activation retries.
+ * 
+ * Sets the maximum number of retries for passive target activation. 0X00 means only one try, no retries. 0xFF means infinite retries.
+ * 
+ * @param[in] pn532_handle PN532 handle.
+ * @param[in] max_retries Maximum number of retries.
+ * 
+ * @return
+ * - ESP_OK on success.
+ * - ESP_ERR_INVALID_ARG if the handle is invalid.
+ * - ESP_ERR_INVALID_RESPONSE if the command check or ackowledgment failed.
+ */
+esp_err_t pn532_set_passive_activation_retries(pn532_handle_t pn532_handle, uint8_t max_retries);
 
 /**
  * @brief Read UID of passive target.
@@ -205,6 +223,7 @@ esp_err_t pn532_SAM_configuration(pn532_handle_t pn532_handle);
  * @return
  * - ESP_OK on success.
  * - ESP_ERR_INVALID_ARG if the handle or UID buffer is invalid.
- * - ESP_FAIL if target detection or acknowledgment failed.
+ * - ESP_ERR_INVALID_RESPONSE if target detection or acknowledgment failed.
+ * - ESP_ERR_NOT_FOUND if no target was found.
  */
 esp_err_t pn532_read_passive_target_id(pn532_handle_t pn532_handle, uint8_t card_baud_rate, uint8_t* uid, size_t* uid_len);
