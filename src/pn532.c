@@ -176,7 +176,7 @@ esp_err_t pn532_SAM_configuration(pn532_handle_t pn532_handle) {
 
     if(response[6] != 0x15) {
         ESP_LOGE(TAG, "failed to check SAM configuration");
-        return ESP_FAIL;
+        return ESP_ERR_INVALID_RESPONSE;
     }
 
     return ESP_OK;
@@ -244,6 +244,38 @@ esp_err_t pn532_read_passive_target_id(pn532_handle_t pn532_handle, uint8_t card
     for(size_t i = 0; i < *uid_len; i++) {
         uid[i] = response[13 + i];
     }
+
+    return ESP_OK;
+}
+
+esp_err_t pn532_read_gpio(pn532_handle_t pn532_handle, uint8_t* gpio_state) {
+    if(!pn532_handle) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    pn532_t* pn532 = (pn532_t*) pn532_handle;
+
+    uint8_t command[] = {
+        PN532_COMMAND_READGPIO,
+    };
+    size_t len = sizeof(command);
+
+    esp_err_t err = pn532_send_command_check_ack(pn532, command, len);
+    if(err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to read GPIO");
+        return err;
+    }
+
+    uint8_t response[11];
+    len = sizeof(response);
+    err = pn532->read_response(pn532, response, len);
+    if(err != ESP_OK) {
+        return err;
+    }
+
+    gpio_state[0] = response[7]; // P3
+    gpio_state[1] = response[8]; // P7
+    gpio_state[2] = response[9]; // I0
 
     return ESP_OK;
 }

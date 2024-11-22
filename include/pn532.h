@@ -227,3 +227,19 @@ esp_err_t pn532_set_passive_activation_retries(pn532_handle_t pn532_handle, uint
  * - ESP_ERR_NOT_FOUND if no target was found.
  */
 esp_err_t pn532_read_passive_target_id(pn532_handle_t pn532_handle, uint8_t card_baud_rate, uint8_t* uid, size_t* uid_len);
+
+/**
+ * @brief Read GPIO state.
+ * 
+ * Reads the state of the GPIO pins P3, P7, and I0.
+ * Buffer[0] = P3, Buffer[1] = P7, Buffer[2] = I0.
+ * 
+ * @param[in] pn532_handle PN532 handle.
+ * @param[out] gpio_state Buffer to store the GPIO state (Buffer must have atleast 3 bytes).
+ * 
+ * @return
+ * - ESP_OK on success.
+ * - ESP_ERR_INVALID_ARG if the handle or GPIO state buffer is invalid.
+ * - ESP_ERR_INVALID_RESPONSE if the command check or ackowledgment failed.
+ */
+esp_err_t pn532_read_gpio(pn532_handle_t pn532_handle, uint8_t* gpio_state);
