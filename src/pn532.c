@@ -6,6 +6,7 @@
 #include "esp_log.h"
 
 #define PN532_MAX_CARDS 1
+#define ACK_OFFSET 6
 
 static const char* TAG = "pn532";
 
@@ -76,7 +77,7 @@ esp_err_t pn532_start(pn532_handle_t pn532_handle) {
     pn532_t* pn532 = (pn532_t*) pn532_handle;
 
     vTaskDelay(PN532_DELAY_DEFAULT);
-    esp_err_t err = pn532_send_command_check_ack(pn532, (uint8_t[]) {PN532_WAKEUP}, 1);
+    esp_err_t err = pn532_send_command_check_ack(pn532, (uint8_t[]) {PN532_COMMAND_GETFIRMWAREVERSION}, 1, 1000);
     if(err != ESP_OK) {
         ESP_LOGE(TAG, "failed to start pn532");
         return err;
@@ -85,7 +86,7 @@ esp_err_t pn532_start(pn532_handle_t pn532_handle) {
     return ESP_OK;
 } 
 
-esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t* command, uint8_t command_len) {
+esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t* command, uint8_t command_len, uint32_t timeout) {
     if(!pn532_handle || !command) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -97,17 +98,15 @@ esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t* com
         return err;
     }
 
-    uint8_t response[sizeof(pn532_ack)];
-    size_t len = sizeof(response);
     #ifdef PN532_DEBUG
         ESP_LOGD(TAG, "reading ack:");
     #endif
-    err = pn532->read_response(pn532, response, len);
+    err = pn532->read_response(pn532, (timeout / portTICK_PERIOD_MS));
     if(err != ESP_OK) {
         return err;
     }
 
-    if(memcmp(response, pn532_ack, sizeof(pn532_ack)) != 0) {
+    if(memcmp(pn532->buffer, pn532_ack, sizeof(pn532_ack)) != 0) {
         ESP_LOGE(TAG, "failed to check ack");
         return ESP_ERR_INVALID_RESPONSE;
     }
@@ -122,18 +121,15 @@ esp_err_t pn532_get_firmware_version(pn532_handle_t pn532_handle, uint8_t* versi
 
     pn532_t* pn532 = (pn532_t*) pn532_handle;
 
-    esp_err_t err = pn532_send_command_check_ack(pn532, (uint8_t[]) {PN532_COMMAND_GETFIRMWAREVERSION}, 1);
+    esp_err_t err = pn532_send_command_check_ack(pn532, (uint8_t[]) {PN532_COMMAND_GETFIRMWAREVERSION}, 1, 1000);
     if(err != ESP_OK) {
         ESP_LOGE(TAG, "failed to get firmware version");
         return err;
     }
 
-    uint8_t response[10];
+    uint8_t response[11];
     size_t len = sizeof(response);
-    err = pn532->read_response(pn532, response, len);
-    if(err != ESP_OK) {
-        return err;
-    }
+    memcpy(response, (pn532->buffer + ACK_OFFSET), len);
 
     if(memcmp(response, pn532_firmwareversion, sizeof(pn532_firmwareversion)) != 0) {
         ESP_LOGE(TAG, "failed to check firmware version");
@@ -141,9 +137,9 @@ esp_err_t pn532_get_firmware_version(pn532_handle_t pn532_handle, uint8_t* versi
     }
 
     version[0] = response[7]; // IC
-    version[1] = response[8]; // IC version
-    version[2] = response[9]; // firmware version
-    version[3] = response[10]; // version of support protocol
+    version[1] = response[8]; // firmware version
+    version[2] = response[9]; // firmware revision
+    version[3] = response[10]; // support
 
     return ESP_OK;
 }
@@ -161,7 +157,7 @@ esp_err_t pn532_SAM_configuration(pn532_handle_t pn532_handle) {
         0x14, // timeout 50ms * 20 = 1s
         0x01, // use IRQ pin
     };
-    esp_err_t err = pn532_send_command_check_ack(pn532, command, sizeof(command));
+    esp_err_t err = pn532_send_command_check_ack(pn532, command, sizeof(command), 1000);
     if(err != ESP_OK) {
         ESP_LOGE(TAG, "failed to configure SAM");
         return err;
@@ -169,10 +165,7 @@ esp_err_t pn532_SAM_configuration(pn532_handle_t pn532_handle) {
 
     uint8_t response[8];
     size_t len = sizeof(response);
-    err = pn532->read_response(pn532, response, len);
-    if(err != ESP_OK) {
-        return err;
-    }
+    memcpy(response, (pn532->buffer + ACK_OFFSET), len);
 
     if(response[6] != 0x15) {
         ESP_LOGE(TAG, "failed to check SAM configuration");
@@ -201,7 +194,7 @@ esp_err_t pn532_set_passive_activation_retries(pn532_handle_t pn532_handle, uint
         ESP_LOGD(TAG, "setting passive activation retries: %02X", max_retries);
     #endif
 
-    esp_err_t err = pn532_send_command_check_ack(pn532, command, sizeof(command));
+    esp_err_t err = pn532_send_command_check_ack(pn532, command, sizeof(command), 1000);
     if(err != ESP_OK) {
         ESP_LOGE(TAG, "failed to set passive activation retries");
         return err;
@@ -222,7 +215,7 @@ esp_err_t pn532_read_passive_target_id(pn532_handle_t pn532_handle, uint8_t card
         PN532_MAX_CARDS,
         card_baud_rate,
     };
-    esp_err_t err = pn532_send_command_check_ack(pn532, command, sizeof(command));
+    esp_err_t err = pn532_send_command_check_ack(pn532, command, sizeof(command), 1000);
     if(err != ESP_OK) {
         ESP_LOGE(TAG, "failed to read passive target id");
         return err;
@@ -230,10 +223,7 @@ esp_err_t pn532_read_passive_target_id(pn532_handle_t pn532_handle, uint8_t card
 
     uint8_t response[20];
     size_t len = sizeof(response);
-    err = pn532->read_response(pn532, response, len);
-    if(err != ESP_OK) {
-        return err;
-    }
+    memcpy(response, (pn532->buffer + ACK_OFFSET), len);
 
     if(!response[7]) {
         ESP_LOGW(TAG, "no card detected");
@@ -260,7 +250,7 @@ esp_err_t pn532_read_gpio(pn532_handle_t pn532_handle, uint8_t* gpio_state) {
     };
     size_t len = sizeof(command);
 
-    esp_err_t err = pn532_send_command_check_ack(pn532, command, len);
+    esp_err_t err = pn532_send_command_check_ack(pn532, command, len, 1000);
     if(err != ESP_OK) {
         ESP_LOGE(TAG, "failed to read GPIO");
         return err;
@@ -268,10 +258,7 @@ esp_err_t pn532_read_gpio(pn532_handle_t pn532_handle, uint8_t* gpio_state) {
 
     uint8_t response[11];
     len = sizeof(response);
-    err = pn532->read_response(pn532, response, len);
-    if(err != ESP_OK) {
-        return err;
-    }
+    memcpy(response, (pn532->buffer + ACK_OFFSET), len);
 
     gpio_state[0] = response[7]; // P3
     gpio_state[1] = response[8]; // P7

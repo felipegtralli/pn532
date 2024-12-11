@@ -157,6 +157,7 @@ esp_err_t pn532_start(pn532_handle_t pn532_handle);
  * @param[in] pn532_handle PN532 handle.
  * @param[in] command Pointer to the command buffer.
  * @param[in] command_len Length of the command buffer.
+ * @param[in] timeout Timeout in milliseconds.
  * 
  * @return
  * - ESP_OK on success.
@@ -164,7 +165,7 @@ esp_err_t pn532_start(pn532_handle_t pn532_handle);
  * - ESP_ERR_INVALID_RESPONSE if the acknowledgment is invalid.
  * - Other error codes from write and read functions.
  */
-esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t* command, uint8_t command_len);
+esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t* command, uint8_t command_len, uint32_t timeout);
 
 /**
  * @brief Get PN532 firmware version.
