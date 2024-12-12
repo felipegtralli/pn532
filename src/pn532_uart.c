@@ -63,7 +63,6 @@ static esp_err_t pn532_uart_read_response(pn532_t* pn532, TickType_t timeout) {
         return ESP_FAIL;
     }
 
-    vTaskDelay(PN532_DELAY_DEFAULT);
     int len = uart_read_bytes(UART_PORT(pn532), pn532->buffer, PN532_BUFFER_SIZE, timeout);
     if(len < 0) {
         ESP_LOGE(TAG, "failed to read response");

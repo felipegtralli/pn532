@@ -8,6 +8,8 @@
 #define PN532_MAX_CARDS 1
 #define ACK_OFFSET 6
 
+#define PN532_DEFAULT_TIMEOUT 100
+
 static const char* TAG = "pn532";
 
 static uint8_t pn532_ack[] = {0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00};
@@ -76,13 +78,14 @@ esp_err_t pn532_start(pn532_handle_t pn532_handle) {
 
     pn532_t* pn532 = (pn532_t*) pn532_handle;
 
-    vTaskDelay(PN532_DELAY_DEFAULT);
-    esp_err_t err = pn532_send_command_check_ack(pn532, (uint8_t[]) {PN532_COMMAND_GETFIRMWAREVERSION}, 1, 1000);
+    // sends a dummy command and ignores ack (i have no idea why, but it was the only way i got it to work) 
+    esp_err_t err = pn532->write_command(pn532, (uint8_t[]) {PN532_COMMAND_GETFIRMWAREVERSION}, 1);
     if(err != ESP_OK) {
-        ESP_LOGE(TAG, "failed to start pn532");
+        ESP_LOGE(TAG, "failed to start PN532");
         return err;
     }
     
+    vTaskDelay(10 / portTICK_PERIOD_MS);
     return ESP_OK;
 } 
 
@@ -93,6 +96,7 @@ esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t* com
 
     pn532_t* pn532 = (pn532_t*) pn532_handle;
     
+    vTaskDelay(10 / portTICK_PERIOD_MS);
     esp_err_t err = pn532->write_command(pn532, command, command_len);
     if(err != ESP_OK) {
         return err;
@@ -101,6 +105,8 @@ esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t* com
     #ifdef PN532_DEBUG
         ESP_LOGD(TAG, "reading ack:");
     #endif
+
+    vTaskDelay(10 / portTICK_PERIOD_MS);
     err = pn532->read_response(pn532, (timeout / portTICK_PERIOD_MS));
     if(err != ESP_OK) {
         return err;
@@ -121,7 +127,7 @@ esp_err_t pn532_get_firmware_version(pn532_handle_t pn532_handle, uint8_t* versi
 
     pn532_t* pn532 = (pn532_t*) pn532_handle;
 
-    esp_err_t err = pn532_send_command_check_ack(pn532, (uint8_t[]) {PN532_COMMAND_GETFIRMWAREVERSION}, 1, 1000);
+    esp_err_t err = pn532_send_command_check_ack(pn532, (uint8_t[]) {PN532_COMMAND_GETFIRMWAREVERSION}, 1, PN532_DEFAULT_TIMEOUT);
     if(err != ESP_OK) {
         ESP_LOGE(TAG, "failed to get firmware version");
         return err;
@@ -157,7 +163,7 @@ esp_err_t pn532_SAM_configuration(pn532_handle_t pn532_handle) {
         0x14, // timeout 50ms * 20 = 1s
         0x01, // use IRQ pin
     };
-    esp_err_t err = pn532_send_command_check_ack(pn532, command, sizeof(command), 1000);
+    esp_err_t err = pn532_send_command_check_ack(pn532, command, sizeof(command), PN532_DEFAULT_TIMEOUT);
     if(err != ESP_OK) {
         ESP_LOGE(TAG, "failed to configure SAM");
         return err;
@@ -194,7 +200,7 @@ esp_err_t pn532_set_passive_activation_retries(pn532_handle_t pn532_handle, uint
         ESP_LOGD(TAG, "setting passive activation retries: %02X", max_retries);
     #endif
 
-    esp_err_t err = pn532_send_command_check_ack(pn532, command, sizeof(command), 1000);
+    esp_err_t err = pn532_send_command_check_ack(pn532, command, sizeof(command), PN532_DEFAULT_TIMEOUT);
     if(err != ESP_OK) {
         ESP_LOGE(TAG, "failed to set passive activation retries");
         return err;
@@ -215,7 +221,7 @@ esp_err_t pn532_read_passive_target_id(pn532_handle_t pn532_handle, uint8_t card
         PN532_MAX_CARDS,
         card_baud_rate,
     };
-    esp_err_t err = pn532_send_command_check_ack(pn532, command, sizeof(command), 1000);
+    esp_err_t err = pn532_send_command_check_ack(pn532, command, sizeof(command), PN532_DEFAULT_TIMEOUT);
     if(err != ESP_OK) {
         ESP_LOGE(TAG, "failed to read passive target id");
         return err;
@@ -250,7 +256,7 @@ esp_err_t pn532_read_gpio(pn532_handle_t pn532_handle, uint8_t* gpio_state) {
     };
     size_t len = sizeof(command);
 
-    esp_err_t err = pn532_send_command_check_ack(pn532, command, len, 1000);
+    esp_err_t err = pn532_send_command_check_ack(pn532, command, len, PN532_DEFAULT_TIMEOUT);
     if(err != ESP_OK) {
         ESP_LOGE(TAG, "failed to read GPIO");
         return err;
