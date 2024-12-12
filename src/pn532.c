@@ -96,7 +96,7 @@ esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t* com
 
     pn532_t* pn532 = (pn532_t*) pn532_handle;
     
-    vTaskDelay(10 / portTICK_PERIOD_MS);
+    vTaskDelay(20 / portTICK_PERIOD_MS);
     esp_err_t err = pn532->write_command(pn532, command, command_len);
     if(err != ESP_OK) {
         return err;
@@ -106,7 +106,7 @@ esp_err_t pn532_send_command_check_ack(pn532_handle_t pn532_handle, uint8_t* com
         ESP_LOGD(TAG, "reading ack:");
     #endif
 
-    vTaskDelay(10 / portTICK_PERIOD_MS);
+    vTaskDelay(20 / portTICK_PERIOD_MS);
     err = pn532->read_response(pn532, (timeout / portTICK_PERIOD_MS));
     if(err != ESP_OK) {
         return err;
