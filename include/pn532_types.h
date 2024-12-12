@@ -7,9 +7,6 @@
     #define PN532_DEBUG
 #endif
 
-#define PN532_DELAY_DEFAULT (500 / portTICK_PERIOD_MS)
-#define PN532_DELAY(ms) (ms / portTICK_PERIOD_MS)
-
 #define PN532_BUFFER_SIZE 256
 
 typedef struct {
