@@ -1,7 +1,13 @@
 #include "pn532.h"
+#include <stdint.h>
+#include <stdbool.h>
+#include "driver/spi_master.h"
+#include "driver/gpio.h"
+#include "esp_err.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "pn532_spi.h"
 
 #if CONFIG_LOG_DEFAULT_LEVEL >= 4 // 4 = LOG_LEVEL_DEBUG
     #define PN532_DEBUG
@@ -34,3 +40,4 @@ typedef struct pn532_t {
     esp_err_t (*read_response)(struct pn532_t* pn532, TickType_t timeout);
     esp_err_t (*free)(struct pn532_t* pn532);
 } pn532_t;
+
