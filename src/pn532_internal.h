@@ -3,6 +3,7 @@
 
 #include "pn532.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "driver/uart.h"
@@ -15,6 +16,8 @@
 #define PN532_DEBUG
 #endif
 
+#define PN532_NORMAL_COMMAND_MAX_LEN 254U
+#define PN532_FRAME_OVERHEAD 8U
 #define PN532_BUFFER_SIZE 256
 
 typedef esp_err_t (*pn532_start_fn)(struct PN532 *pn532);
@@ -57,6 +60,10 @@ typedef struct PN532
     pn532_free_fn free;
 } PN532;
 
+/* UART functions */
 esp_err_t pn532_uart_init(PN532 *pn532, const PN532UartConfig *config);
+
+/* PN532 common functions */
+size_t pn532_command_framer(const uint8_t *command, size_t command_len, uint8_t *frame);
 
 #endif // PN532_INTERNAL_H

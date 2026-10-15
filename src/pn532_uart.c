@@ -5,7 +5,8 @@
 
 #include "esp_log.h"
 
-#include "assert.h"
+#include <assert.h>
+#include <string.h>
 
 #define PN532_UART_BAUD_RATE 115200U
 
@@ -15,9 +16,16 @@
 #define PN532_UART_RX_BUF_SIZE 256U
 #define PN532_UART_TX_BUF_SIZE 256U
 
+#define PN532_UART_PREAMBLE_SIZE 5U
+
+#define PN532_UART_MUTEX_TIMEOUT_MS 1000U
+#define PN532_UART_TX_TIMEOUT_MS 1000U
+
 #define UART_PORT(pn532) ((pn532)->uart.uart_port)
 
 static const char *TAG = "pn532";
+
+static const uint8_t pn532_uart_preamble[] = {0x55U, 0x55U, 0x00U, 0x00U, 0x00U};
 
 /*
  * UART wake-up only; does not configure or verify the PN532.
@@ -77,55 +85,52 @@ static esp_err_t pn532_uart_start(PN532 *pn532)
 
 static esp_err_t pn532_uart_write_command(PN532 *pn532, uint8_t *command, uint8_t command_len)
 {
-    (void)uart_flush(UART_PORT(pn532));
+    assert((pn532 != NULL) &&
+           (command != NULL));
 
-    size_t data_len = command_len + 1;
-    /* UM0701-02 Rev. 02, §6.2.1.1, p. 28: LEN data bytes plus 7 framing bytes. */
-    uint8_t cmd[data_len + 7];
-
-    cmd[0] = PN532_PREAMBLE;
-    cmd[1] = PN532_STARTCODE1;
-    cmd[2] = PN532_STARTCODE2;
-    cmd[3] = data_len;
-    cmd[4] = ~data_len + 1;
-    cmd[5] = PN532_HOSTTOPN532;
-
-    for (size_t i = 0; i < command_len; i++)
+    if ((command_len == 0) ||
+        (command_len > PN532_NORMAL_COMMAND_MAX_LEN))
     {
-        cmd[6 + i] = command[i];
+        return ESP_ERR_INVALID_ARG;
     }
 
-    uint8_t checksum = PN532_HOSTTOPN532;
-    for (size_t i = 0; i < command_len; i++)
+    uint8_t cmd[PN532_UART_PREAMBLE_SIZE + PN532_FRAME_OVERHEAD + command_len];
+    (void)memcpy(cmd, pn532_uart_preamble, PN532_UART_PREAMBLE_SIZE);
+
+    const size_t frame_len = pn532_command_framer(command, command_len, cmd + PN532_UART_PREAMBLE_SIZE);
+    const size_t cmd_len = PN532_UART_PREAMBLE_SIZE + frame_len;
+
+    BaseType_t mutex_res = xSemaphoreTake(pn532->mutex, pdMS_TO_TICKS(PN532_UART_MUTEX_TIMEOUT_MS));
+    if (mutex_res != pdTRUE)
     {
-        checksum += command[i];
-    }
-    checksum = ~checksum + 1;
-
-    cmd[6 + command_len] = checksum;
-    cmd[7 + command_len] = PN532_POSTAMBLE;
-
-#ifdef PN532_DEBUG
-    ESP_LOGD(TAG, "writing command:");
-    ESP_LOG_BUFFER_HEX_LEVEL(TAG, cmd, sizeof(cmd), ESP_LOG_DEBUG);
-#endif
-
-    if (xSemaphoreTake(pn532->mutex, pdMS_TO_TICKS(1000)) != pdTRUE)
-    {
-        ESP_LOGE(TAG, "failed to take mutex");
-        return ESP_FAIL;
+        return ESP_ERR_TIMEOUT;
     }
 
-    int written = uart_write_bytes(UART_PORT(pn532), (const char *)cmd, sizeof(cmd));
-    if (written != sizeof(cmd))
+    const TickType_t tx_timeout_ticks = pdMS_TO_TICKS(PN532_UART_TX_TIMEOUT_MS);
+
+    esp_err_t status = uart_wait_tx_done(pn532->uart.uart_port, tx_timeout_ticks);
+    if (status == ESP_OK)
     {
-        ESP_LOGE(TAG, "failed to write command");
-        xSemaphoreGive(pn532->mutex);
-        return ESP_FAIL;
+        const int written = uart_write_bytes(pn532->uart.uart_port, cmd, cmd_len);
+        if (written != (int)cmd_len)
+        {
+            status = ESP_FAIL;
+        }
     }
 
-    xSemaphoreGive(pn532->mutex);
-    return ESP_OK;
+    if (status == ESP_OK)
+    {
+        status = uart_wait_tx_done(pn532->uart.uart_port, tx_timeout_ticks);
+    }
+
+    mutex_res = xSemaphoreGive(pn532->mutex);
+    if ((mutex_res != pdTRUE) &&
+        (status == ESP_OK))
+    {
+        status = ESP_FAIL;
+    }
+
+    return status;
 }
 
 static esp_err_t pn532_uart_read_response(PN532 *pn532, TickType_t timeout)
