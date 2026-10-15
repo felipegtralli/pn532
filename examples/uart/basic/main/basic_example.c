@@ -6,7 +6,7 @@
 #define UART_BAUD_RATE CONFIG_UART_BAUD_RATE
 
 void app_main() {
-    pn532_config_t pn532_config = {
+    PN532Config pn532_config = {
         .protocol = PN532_UART_PROTOCOL,
         .uart = {
             .tx = UART_TX_PIN,
@@ -15,6 +15,6 @@ void app_main() {
             .baud_rate = UART_BAUD_RATE,
         },
     };
-    pn532_handle_t pn532 = NULL;
+    PN532Handle pn532 = NULL;
     ESP_ERROR_CHECK(pn532_init(&pn532, &pn532_config)); // use pn532_free() after done
 }

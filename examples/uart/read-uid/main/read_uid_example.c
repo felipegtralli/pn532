@@ -17,7 +17,7 @@ volatile uint16_t fail_count = 0;
 static const char* TAG = "example";
 
 void example_task(void* pvParameters) {
-    pn532_handle_t pn532 = (pn532_handle_t) pvParameters;
+    PN532Handle pn532 = (PN532Handle) pvParameters;
 
     ESP_ERROR_CHECK(pn532_start(pn532));
 
@@ -60,7 +60,7 @@ void example_task(void* pvParameters) {
 }
 
 void app_main() {
-    pn532_config_t pn532_config = {
+    PN532Config pn532_config = {
         .protocol = PN532_UART_PROTOCOL,
         .uart = {
             .tx = UART_TX_PIN,
@@ -69,7 +69,7 @@ void app_main() {
             .baud_rate = UART_BAUD_RATE,
         },
     };
-    pn532_handle_t pn532 = NULL;
+    PN532Handle pn532 = NULL;
     ESP_ERROR_CHECK(pn532_init(&pn532, &pn532_config));
 
     xTaskCreate(example_task, "example", 4096, (void*) pn532, 5, NULL);
