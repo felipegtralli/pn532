@@ -7,11 +7,13 @@
 
 #include "assert.h"
 
+#define PN532_UART_BAUD_RATE 115200U
+
 #define PN532_UART_START_TIMEOUT_MS 1000U
 #define PN532_UART_WAKEUP_DELAY_US 5000U
 
-#define PN532_UART_RX_BUF_SIZE 256
-#define PN532_UART_TX_BUF_SIZE 256
+#define PN532_UART_RX_BUF_SIZE 256U
+#define PN532_UART_TX_BUF_SIZE 256U
 
 #define UART_PORT(pn532) ((pn532)->uart.uart_port)
 
@@ -162,57 +164,65 @@ static esp_err_t pn532_uart_free(PN532 *pn532)
 
 esp_err_t pn532_uart_init(PN532 *pn532, const PN532UartConfig *config)
 {
-    pn532->protocol = PN532_UART_PROTOCOL;
-    UART_PORT(pn532) = config->uart_port;
+    assert((pn532 != NULL) &&
+           (config != NULL));
 
     const uart_config_t uart_config = {
-        .baud_rate = config->baud_rate,
+        .baud_rate = PN532_UART_BAUD_RATE,
         .data_bits = UART_DATA_8_BITS,
         .parity = UART_PARITY_DISABLE,
         .stop_bits = UART_STOP_BITS_1,
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
-    esp_err_t err = uart_param_config(UART_PORT(pn532), &uart_config);
-    if (err != ESP_OK)
+
+    esp_err_t status = uart_is_driver_installed(config->uart_port) ? ESP_ERR_INVALID_STATE : ESP_OK;
+
+    if (status == ESP_OK)
     {
-        ESP_LOGE(TAG, "uart_param_config failed: %d", err);
-        goto ERR;
+        status = uart_param_config(config->uart_port, &uart_config);
     }
 
-    err = uart_set_pin(UART_PORT(pn532), config->tx, config->rx, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    if (err != ESP_OK)
+    if (status == ESP_OK)
     {
-        ESP_LOGE(TAG, "uart_set_pin failed: %d", err);
-        goto ERR;
+        status = uart_set_pin(config->uart_port, config->tx, config->rx, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     }
 
-    err = uart_driver_install(UART_PORT(pn532), PN532_UART_RX_BUF_SIZE, PN532_UART_TX_BUF_SIZE, 0, NULL, 0);
-    if (err != ESP_OK)
+    bool uart_driver_installed = false;
+    if (status == ESP_OK)
     {
-        ESP_LOGE(TAG, "uart_driver_install failed: %d", err);
-        goto ERR;
-    }
-    (void)uart_flush(UART_PORT(pn532));
-
-    pn532->mutex = xSemaphoreCreateMutex();
-    if (!pn532->mutex)
-    {
-        ESP_LOGE(TAG, "failed to create mutex");
-        uart_driver_delete(UART_PORT(pn532));
-        free(pn532);
-        return ESP_ERR_NO_MEM;
+        status = uart_driver_install(config->uart_port, PN532_UART_RX_BUF_SIZE, PN532_UART_TX_BUF_SIZE, 0, NULL, 0);
+        uart_driver_installed = (status == ESP_OK);
     }
 
-    pn532->start = pn532_uart_start;
-    pn532->write_command = pn532_uart_write_command;
-    pn532->read_response = pn532_uart_read_response;
-    pn532->free = pn532_uart_free;
+    if (status == ESP_OK)
+    {
+        pn532->mutex = xSemaphoreCreateMutex();
+        status = (pn532->mutex != NULL) ? ESP_OK : ESP_ERR_NO_MEM;
+    }
 
-    ESP_LOGI(TAG, "pn532 uart initialized");
-    return ESP_OK;
+    if (status == ESP_OK)
+    {
+        pn532->protocol = PN532_UART_PROTOCOL;
+        pn532->uart.uart_port = config->uart_port;
+        pn532->start = pn532_uart_start;
+        pn532->write_command = pn532_uart_write_command;
+        pn532->read_response = pn532_uart_read_response;
+        pn532->free = pn532_uart_free;
+    }
+    else
+    {
+        if (pn532->mutex != NULL)
+        {
+            vSemaphoreDelete(pn532->mutex);
+            pn532->mutex = NULL;
+        }
 
-ERR:
-    free(pn532);
-    return err;
+        if (uart_driver_installed)
+        {
+            (void)uart_driver_delete(config->uart_port);
+        }
+    }
+
+    return status;
 }

@@ -75,7 +75,6 @@ typedef struct
     gpio_num_t tx;         // UART TX pin
     gpio_num_t rx;         // UART RX pin
     uart_port_t uart_port; // UART port number. UART_NUM_0 ~ (UART_NUM_MAX - 1)
-    uint32_t baud_rate;    // UART baud rate
 } PN532UartConfig;
 
 /**
