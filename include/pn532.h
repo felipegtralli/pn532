@@ -246,17 +246,19 @@ esp_err_t pn532_read_passive_target_id(PN532Handle pn532_handle, uint8_t card_ba
 /**
  * @brief Read GPIO state.
  *
- * Reads the state of the GPIO pins P3, P7, and I0.
- * Buffer[0] = P3, Buffer[1] = P7, Buffer[2] = I0.
+ * Reads the state of the GPIO ports P3 and P7 and the interface-mode lines I0/I1.
+ * Buffer[0] = P3, Buffer[1] = P7, Buffer[2] = I0I1.
  *
  * @param[in] pn532_handle PN532 handle.
  * @param[out] gpio_state Buffer to store the GPIO state (Buffer must have atleast 3 bytes).
+ * @param[in] gpio_size Capacity of gpio_state in bytes.
  *
  * @return
  * - ESP_OK on success.
  * - ESP_ERR_INVALID_ARG if the handle or GPIO state buffer is invalid.
+ * - ESP_ERR_INVALID_SIZE if gpio_size is smaller than 3 bytes.
  * - ESP_ERR_INVALID_RESPONSE if the command check or ackowledgment failed.
  */
-esp_err_t pn532_read_gpio(PN532Handle pn532_handle, uint8_t *gpio_state);
+esp_err_t pn532_read_gpio(PN532Handle pn532_handle, uint8_t *gpio_state, size_t gpio_size);
 
 #endif // PN532_H
