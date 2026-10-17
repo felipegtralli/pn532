@@ -193,7 +193,7 @@ esp_err_t pn532_exec_command(PN532Handle pn532_handle,
  * - ESP_ERR_INVALID_ARG if the handle or version is invalid.
  * - ESP_ERR_INVALID_RESPONSE if the firmware version check or ackowledgment failed.
  */
-esp_err_t pn532_get_firmware_version(PN532Handle pn532_handle, uint8_t *version);
+esp_err_t pn532_get_firmware_version(PN532Handle pn532_handle, uint8_t *version, size_t version_size);
 
 /**
  * @brief Configure PN532 in SAM (Security Access Module) mode.

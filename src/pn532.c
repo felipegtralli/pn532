@@ -10,8 +10,10 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
-#define PN532_MAX_CARDS 1
-#define ACK_OFFSET 6
+#define PN532_MAX_CARDS 1U
+
+#define PN532_VERSION_SIZE 4U
+#define PN532_VERSION_RESPONSE_SIZE 13U
 
 #define PN532_DEFAULT_TIMEOUT 100
 #define PN532_MUTEX_TIMEOUT_MS 1000U
@@ -19,8 +21,6 @@
 static const char *TAG = "pn532-driver";
 
 static const uint8_t PN532_ACK[] = {0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00};
-
-static uint8_t pn532_firmwareversion[] = {0x00, 0x00, 0xFF, 0x06, 0xFA, 0xD5};
 
 static esp_err_t pn532_read_check_ack(PN532 *pn532, size_t *bytes_read, TickType_t timeout)
 {
@@ -43,7 +43,7 @@ static esp_err_t pn532_read_check_ack(PN532 *pn532, size_t *bytes_read, TickType
     return (cmp == 0) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
 }
 
-static esp_err_t pn532_recv_response(PN532 *pn532, uint8_t expected_command, uint8_t *response, size_t response_size, size_t *response_len, TickType_t timeout)
+static esp_err_t pn532_recv_response(PN532 *pn532, uint8_t expected_command, size_t read_size, uint8_t *response, size_t response_size, size_t *response_len, TickType_t timeout)
 {
     assert((pn532 != NULL) &&
            (response_len != NULL));
@@ -52,13 +52,19 @@ static esp_err_t pn532_recv_response(PN532 *pn532, uint8_t expected_command, uin
 
     size_t bytes_read = 0U;
 
+    if ((read_size == 0U) ||
+        (read_size > sizeof(pn532->buffer)))
+    {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
     esp_err_t status = pn532_read_check_ack(pn532, &bytes_read, timeout);
     if (status != ESP_OK)
     {
         return status;
     }
 
-    status = pn532->read_response(pn532, pn532->buffer, sizeof(pn532->buffer), &bytes_read, timeout);
+    status = pn532->read_response(pn532, pn532->buffer, read_size, &bytes_read, timeout);
     if (status != ESP_OK)
     {
         return status;
@@ -295,7 +301,7 @@ esp_err_t pn532_exec_command(PN532Handle pn532_handle,
     if (status == ESP_OK)
     {
         const uint8_t expected_command = command[0] + 1U;
-        status = pn532_recv_response(pn532, expected_command, response, response_size, response_len, pdMS_TO_TICKS(timeout));
+        status = pn532_recv_response(pn532, expected_command, sizeof(pn532->buffer), response, response_size, response_len, pdMS_TO_TICKS(timeout));
     }
 
     mutex_res = xSemaphoreGive(pn532_handle->mutex);
@@ -313,40 +319,55 @@ esp_err_t pn532_exec_command(PN532Handle pn532_handle,
     return status;
 }
 
-// esp_err_t pn532_get_firmware_version(PN532Handle pn532_handle, uint8_t *version)
-// {
-//     if (!pn532_handle || !version)
-//     {
-//         return ESP_ERR_INVALID_ARG;
-//     }
+esp_err_t pn532_get_firmware_version(PN532Handle pn532_handle, uint8_t *version_buffer, size_t version_size)
+{
+    if ((pn532_handle == NULL) ||
+        (version_buffer == NULL))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
 
-//     PN532 *pn532 = pn532_handle;
+    if (version_size < PN532_VERSION_SIZE)
+    {
+        return ESP_ERR_INVALID_SIZE;
+    }
 
-//     esp_err_t err =
-//         pn532_send_command_check_ack(pn532, (uint8_t[]){PN532_COMMAND_GETFIRMWAREVERSION}, 1, PN532_DEFAULT_TIMEOUT);
-//     if (err != ESP_OK)
-//     {
-//         ESP_LOGE(TAG, "failed to get firmware version");
-//         return err;
-//     }
+    PN532 *pn532 = pn532_handle;
 
-//     uint8_t response[11];
-//     size_t len = sizeof(response);
-//     memcpy(response, (pn532->buffer + ACK_OFFSET), len);
+    BaseType_t mutex_res = xSemaphoreTake(pn532->mutex, pdMS_TO_TICKS(PN532_MUTEX_TIMEOUT_MS));
+    if (mutex_res != pdTRUE)
+    {
+        ESP_LOGE(TAG, "PN532 get firmware version failed to take mutex: %s", esp_err_to_name(ESP_ERR_TIMEOUT));
+        return ESP_ERR_TIMEOUT;
+    }
 
-//     if (memcmp(response, pn532_firmwareversion, sizeof(pn532_firmwareversion)) != 0)
-//     {
-//         ESP_LOGE(TAG, "failed to check firmware version");
-//         return ESP_ERR_INVALID_RESPONSE;
-//     }
+    const uint8_t firmware_command[] = {PN532_COMMAND_GETFIRMWAREVERSION};
 
-//     version[0] = response[7];  // IC
-//     version[1] = response[8];  // firmware version
-//     version[2] = response[9];  // firmware revision
-//     version[3] = response[10]; // support
+    esp_err_t status = pn532->write_command(pn532, firmware_command, sizeof(firmware_command));
+    if (status == ESP_OK)
+    {
+        size_t response_len = 0U;
+        const uint8_t expected_command = PN532_COMMAND_GETFIRMWAREVERSION + 1U;
 
-//     return ESP_OK;
-// }
+        status = pn532_recv_response(pn532, expected_command, PN532_VERSION_RESPONSE_SIZE, version_buffer, version_size, &response_len, pdMS_TO_TICKS(PN532_DEFAULT_TIMEOUT));
+        if (status == ESP_OK)
+        {
+            if (response_len != PN532_VERSION_SIZE)
+            {
+                status = ESP_ERR_INVALID_RESPONSE;
+            }
+        }
+    }
+
+    mutex_res = xSemaphoreGive(pn532->mutex);
+    if ((mutex_res != pdTRUE) &&
+        (status == ESP_OK))
+    {
+        status = ESP_FAIL;
+    }
+
+    return status;
+}
 
 // esp_err_t pn532_SAM_configuration(PN532Handle pn532_handle)
 // {
