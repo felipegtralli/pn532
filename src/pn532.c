@@ -13,9 +13,11 @@
 #define PN532_MAX_CARDS 1U
 
 #define PN532_VERSION_SIZE 4U
-#define PN532_VERSION_RESPONSE_SIZE 13U
 
-#define PN532_DEFAULT_TIMEOUT 100
+#define PN532_VERSION_RESPONSE_SIZE 13U
+#define PN532_SAM_RESPONSE_SIZE 9U
+
+#define PN532_DEFAULT_TIMEOUT 1000U
 #define PN532_MUTEX_TIMEOUT_MS 1000U
 
 static const char *TAG = "pn532-driver";
@@ -369,40 +371,54 @@ esp_err_t pn532_get_firmware_version(PN532Handle pn532_handle, uint8_t *version_
     return status;
 }
 
-// esp_err_t pn532_SAM_configuration(PN532Handle pn532_handle)
-// {
-//     if (!pn532_handle)
-//     {
-//         return ESP_ERR_INVALID_ARG;
-//     }
+esp_err_t pn532_SAM_configuration(PN532Handle pn532_handle)
+{
+    if (pn532_handle == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
 
-//     PN532 *pn532 = pn532_handle;
+    PN532 *pn532 = pn532_handle;
 
-//     uint8_t command[] = {
-//         PN532_COMMAND_SAMCONFIGURATION,
-//         0x01, // normal mode
-//         0x14, // timeout 50ms * 20 = 1s
-//         0x01, // use IRQ pin
-//     };
-//     esp_err_t err = pn532_send_command_check_ack(pn532, command, sizeof(command), PN532_DEFAULT_TIMEOUT);
-//     if (err != ESP_OK)
-//     {
-//         ESP_LOGE(TAG, "failed to configure SAM");
-//         return err;
-//     }
+    uint8_t sam_command[] = {
+        PN532_COMMAND_SAMCONFIGURATION,
+        0x01, /* normal mode */
+        0x14, /* ignored in normal mode */
+        0x01, /* irq enabled*/
+    };
 
-//     uint8_t response[8];
-//     size_t len = sizeof(response);
-//     memcpy(response, (pn532->buffer + ACK_OFFSET), len);
+    BaseType_t mutex_res = xSemaphoreTake(pn532->mutex, pdMS_TO_TICKS(PN532_MUTEX_TIMEOUT_MS));
+    if (mutex_res != pdTRUE)
+    {
+        ESP_LOGE(TAG, "PN532 SAM configuration failed to take mutex: %s", esp_err_to_name(ESP_ERR_TIMEOUT));
+        return ESP_ERR_TIMEOUT;
+    }
 
-//     if (response[6] != 0x15)
-//     {
-//         ESP_LOGE(TAG, "failed to check SAM configuration");
-//         return ESP_ERR_INVALID_RESPONSE;
-//     }
+    esp_err_t status = pn532->write_command(pn532, sam_command, sizeof(sam_command));
+    if (status == ESP_OK)
+    {
+        size_t response_len = 0U;
+        const uint8_t expected_command = PN532_COMMAND_SAMCONFIGURATION + 1U;
 
-//     return ESP_OK;
-// }
+        status = pn532_recv_response(pn532, expected_command, PN532_SAM_RESPONSE_SIZE, NULL, 0U, &response_len, pdMS_TO_TICKS(PN532_DEFAULT_TIMEOUT));
+        if (status == ESP_OK)
+        {
+            if (response_len != 0U)
+            {
+                status = ESP_ERR_INVALID_RESPONSE;
+            }
+        }
+    }
+
+    mutex_res = xSemaphoreGive(pn532->mutex);
+    if ((mutex_res != pdTRUE) &&
+        (status == ESP_OK))
+    {
+        status = ESP_FAIL;
+    }
+
+    return status;
+}
 
 // esp_err_t pn532_set_passive_activation_retries(PN532Handle pn532_handle, uint8_t max_retries)
 // {
