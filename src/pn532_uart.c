@@ -6,6 +6,7 @@
 #include "esp_log.h"
 
 #include <assert.h>
+#include <stdint.h>
 #include <string.h>
 
 #define PN532_UART_BAUD_RATE 115200U
@@ -18,7 +19,6 @@
 
 #define PN532_UART_PREAMBLE_SIZE 5U
 
-#define PN532_UART_MUTEX_TIMEOUT_MS 1000U
 #define PN532_UART_TX_TIMEOUT_MS 1000U
 
 #define UART_PORT(pn532) ((pn532)->uart.uart_port)
@@ -37,53 +37,39 @@ static esp_err_t pn532_uart_start(PN532 *pn532)
     assert((pn532 != NULL) &&
            (pn532->protocol == PN532_UART_PROTOCOL));
 
-    if ((pn532->mutex == NULL) ||
-        (pn532->uart.uart_port >= UART_NUM_MAX))
+    if (pn532->uart.uart_port >= UART_NUM_MAX)
     {
         return ESP_ERR_INVALID_STATE;
     }
 
     const TickType_t timeout_ticks = pdMS_TO_TICKS(PN532_UART_START_TIMEOUT_MS);
 
-    BaseType_t mutex_res = xSemaphoreTake(pn532->mutex, timeout_ticks);
-    if (mutex_res != pdTRUE)
-    {
-        return ESP_ERR_TIMEOUT;
-    }
-
     esp_err_t status = uart_wait_tx_done(pn532->uart.uart_port, timeout_ticks);
-    if (status == ESP_OK)
+    if (status != ESP_OK)
     {
-        const uint8_t wakeup = PN532_WAKEUP;
-
-        const int written = uart_write_bytes(pn532->uart.uart_port, &wakeup, sizeof(wakeup));
-        if (written != (int)sizeof(wakeup))
-        {
-            status = ESP_FAIL;
-        }
+        return status;
     }
 
-    if (status == ESP_OK)
+    const uint8_t wakeup = PN532_WAKEUP;
+
+    const int written = uart_write_bytes(pn532->uart.uart_port, &wakeup, sizeof(wakeup));
+    if (written != (int)sizeof(wakeup))
     {
-        status = uart_wait_tx_done(pn532->uart.uart_port, timeout_ticks);
+        return ESP_FAIL;
     }
 
-    if (status == ESP_OK)
+    status = uart_wait_tx_done(pn532->uart.uart_port, timeout_ticks);
+    if (status != ESP_OK)
     {
-        esp_rom_delay_us(PN532_UART_WAKEUP_DELAY_US);
+        return status;
     }
 
-    mutex_res = xSemaphoreGive(pn532->mutex);
-    if ((mutex_res != pdTRUE) &&
-        (status == ESP_OK))
-    {
-        status = ESP_FAIL;
-    }
+    esp_rom_delay_us(PN532_UART_WAKEUP_DELAY_US);
 
     return status;
 }
 
-static esp_err_t pn532_uart_write_command(PN532 *pn532, uint8_t *command, uint8_t command_len)
+static esp_err_t pn532_uart_write_command(PN532 *pn532, const uint8_t *command, uint8_t command_len)
 {
     assert((pn532 != NULL) &&
            (command != NULL));
@@ -100,56 +86,52 @@ static esp_err_t pn532_uart_write_command(PN532 *pn532, uint8_t *command, uint8_
     const size_t frame_len = pn532_command_framer(command, command_len, cmd + PN532_UART_PREAMBLE_SIZE);
     const size_t cmd_len = PN532_UART_PREAMBLE_SIZE + frame_len;
 
-    BaseType_t mutex_res = xSemaphoreTake(pn532->mutex, pdMS_TO_TICKS(PN532_UART_MUTEX_TIMEOUT_MS));
-    if (mutex_res != pdTRUE)
-    {
-        return ESP_ERR_TIMEOUT;
-    }
-
     const TickType_t tx_timeout_ticks = pdMS_TO_TICKS(PN532_UART_TX_TIMEOUT_MS);
 
     esp_err_t status = uart_wait_tx_done(pn532->uart.uart_port, tx_timeout_ticks);
-    if (status == ESP_OK)
+    if (status != ESP_OK)
     {
-        const int written = uart_write_bytes(pn532->uart.uart_port, cmd, cmd_len);
-        if (written != (int)cmd_len)
-        {
-            status = ESP_FAIL;
-        }
+        return status;
     }
 
-    if (status == ESP_OK)
+    const int written = uart_write_bytes(pn532->uart.uart_port, cmd, cmd_len);
+    if (written != (int)cmd_len)
     {
-        status = uart_wait_tx_done(pn532->uart.uart_port, tx_timeout_ticks);
+        return ESP_FAIL;
     }
 
-    mutex_res = xSemaphoreGive(pn532->mutex);
-    if ((mutex_res != pdTRUE) &&
-        (status == ESP_OK))
-    {
-        status = ESP_FAIL;
-    }
+    status = uart_wait_tx_done(pn532->uart.uart_port, tx_timeout_ticks);
 
     return status;
 }
 
-static esp_err_t pn532_uart_read_response(PN532 *pn532, TickType_t timeout)
+static esp_err_t pn532_uart_read_response(PN532 *pn532, uint8_t *buffer, size_t buffer_size, size_t *bytes_read, TickType_t timeout)
 {
-    if (xSemaphoreTake(pn532->mutex, pdMS_TO_TICKS(1000)) != pdTRUE)
+    assert((pn532 != NULL) &&
+           (buffer != NULL) &&
+           (bytes_read != NULL));
+
+    *bytes_read = 0U;
+
+    if ((buffer_size == 0U) ||
+        (buffer_size > UINT32_MAX))
     {
-        ESP_LOGE(TAG, "failed to take mutex");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const int read = uart_read_bytes(pn532->uart.uart_port, buffer, (uint32_t)buffer_size, timeout);
+    if (read < 0)
+    {
         return ESP_FAIL;
     }
 
-    int len = uart_read_bytes(UART_PORT(pn532), pn532->buffer, PN532_BUFFER_SIZE, timeout);
-    if (len < 0)
+    if (read == 0)
     {
-        ESP_LOGE(TAG, "failed to read response");
-        xSemaphoreGive(pn532->mutex);
-        return ESP_FAIL;
+        return ESP_ERR_TIMEOUT;
     }
 
-    xSemaphoreGive(pn532->mutex);
+    *bytes_read = (size_t)read;
+
     return ESP_OK;
 }
 
@@ -161,8 +143,6 @@ static esp_err_t pn532_uart_free(PN532 *pn532)
         ESP_LOGE(TAG, "uart_driver_delete failed: %d", err);
         return err;
     }
-
-    vSemaphoreDelete(pn532->mutex);
 
     return ESP_OK;
 }
@@ -202,12 +182,6 @@ esp_err_t pn532_uart_init(PN532 *pn532, const PN532UartConfig *config)
 
     if (status == ESP_OK)
     {
-        pn532->mutex = xSemaphoreCreateMutex();
-        status = (pn532->mutex != NULL) ? ESP_OK : ESP_ERR_NO_MEM;
-    }
-
-    if (status == ESP_OK)
-    {
         pn532->protocol = PN532_UART_PROTOCOL;
         pn532->uart.uart_port = config->uart_port;
         pn532->start = pn532_uart_start;
@@ -217,12 +191,6 @@ esp_err_t pn532_uart_init(PN532 *pn532, const PN532UartConfig *config)
     }
     else
     {
-        if (pn532->mutex != NULL)
-        {
-            vSemaphoreDelete(pn532->mutex);
-            pn532->mutex = NULL;
-        }
-
         if (uart_driver_installed)
         {
             (void)uart_driver_delete(config->uart_port);

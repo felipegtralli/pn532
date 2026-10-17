@@ -21,8 +21,8 @@
 #define PN532_BUFFER_SIZE 256
 
 typedef esp_err_t (*pn532_start_fn)(struct PN532 *pn532);
-typedef esp_err_t (*pn532_write_command_fn)(struct PN532 *pn532, uint8_t *command, uint8_t command_len);
-typedef esp_err_t (*pn532_read_response_fn)(struct PN532 *pn532, TickType_t timeout);
+typedef esp_err_t (*pn532_write_command_fn)(struct PN532 *pn532, const uint8_t *command, uint8_t command_len);
+typedef esp_err_t (*pn532_read_response_fn)(struct PN532 *pn532, uint8_t *buffer, size_t buffer_size, size_t *bytes_read, TickType_t timeout);
 typedef esp_err_t (*pn532_free_fn)(struct PN532 *pn532);
 
 typedef struct
@@ -65,5 +65,6 @@ esp_err_t pn532_uart_init(PN532 *pn532, const PN532UartConfig *config);
 
 /* PN532 common functions */
 size_t pn532_command_framer(const uint8_t *command, size_t command_len, uint8_t *frame);
+esp_err_t pn532_response_parser(const uint8_t *frame, size_t frame_len, uint8_t expected_command, const uint8_t **payload, size_t *payload_len);
 
 #endif // PN532_INTERNAL_H

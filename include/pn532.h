@@ -5,6 +5,7 @@
 
 #include <driver/gpio.h>
 #include <driver/uart.h>
+#include <stdint.h>
 
 #define PN532_PREAMBLE 0x00
 #define PN532_STARTCODE1 0x00
@@ -171,7 +172,13 @@ esp_err_t pn532_start(PN532Handle pn532_handle);
  * - ESP_ERR_INVALID_RESPONSE if the acknowledgment is invalid.
  * - Other error codes from write and read functions.
  */
-esp_err_t pn532_send_command_check_ack(PN532Handle pn532_handle, uint8_t *command, uint8_t command_len, uint32_t timeout);
+esp_err_t pn532_exec_command(PN532Handle pn532_handle,
+                             const uint8_t *command,
+                             uint8_t command_len,
+                             uint8_t *response,
+                             size_t response_size,
+                             size_t *response_len,
+                             uint32_t timeout);
 
 /**
  * @brief Get PN532 firmware version.

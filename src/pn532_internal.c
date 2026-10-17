@@ -2,9 +2,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "esp_err.h"
 #include "pn532_internal.h"
 
+#define PN532_FRAME_PREAMBLE_OFFSET 0U
+#define PN532_FRAME_STARTCODE1_OFFSET 1U
+#define PN532_FRAME_STARTCODE2_OFFSET 2U
+#define PN532_FRAME_LEN_OFFSET 3U
+#define PN532_FRAME_LCS_OFFSET 4U
+#define PN532_FRAME_DATA_OFFSET 5U
 #define PN532_FRAME_COMMAND_OFFSET 6U
+
+#define PN532_FRAME_HEADER_SIZE 5U
+#define PN532_EXTENDED_FRAME_MARKER 0xFFU
+
+#define PN532_RESPONSE_TFI 0xD5U
+#define PN532_ERROR_CODE 0x7FU
 
 size_t pn532_command_framer(const uint8_t *command, size_t command_len, uint8_t *frame)
 {
@@ -14,12 +27,12 @@ size_t pn532_command_framer(const uint8_t *command, size_t command_len, uint8_t 
     const uint8_t data_len = command_len + 1U;
     uint8_t checksum = PN532_HOSTTOPN532;
 
-    frame[0] = PN532_PREAMBLE;
-    frame[1] = PN532_STARTCODE1;
-    frame[2] = PN532_STARTCODE2;
-    frame[3] = data_len;
-    frame[4] = ~data_len + 1U;
-    frame[5] = PN532_HOSTTOPN532;
+    frame[PN532_FRAME_PREAMBLE_OFFSET] = PN532_PREAMBLE;
+    frame[PN532_FRAME_STARTCODE1_OFFSET] = PN532_STARTCODE1;
+    frame[PN532_FRAME_STARTCODE2_OFFSET] = PN532_STARTCODE2;
+    frame[PN532_FRAME_LEN_OFFSET] = data_len;
+    frame[PN532_FRAME_LCS_OFFSET] = ~data_len + 1U;
+    frame[PN532_FRAME_DATA_OFFSET] = PN532_HOSTTOPN532;
 
     for (size_t i = 0U; i < command_len; i++)
     {
@@ -34,4 +47,81 @@ size_t pn532_command_framer(const uint8_t *command, size_t command_len, uint8_t 
     frame[postamble_offset] = PN532_POSTAMBLE;
 
     return PN532_FRAME_OVERHEAD + command_len;
+}
+
+esp_err_t pn532_response_parser(const uint8_t *frame, size_t frame_len, uint8_t expected_command, const uint8_t **payload, size_t *payload_len)
+{
+    assert((frame != NULL) &&
+           (payload != NULL) &&
+           (payload_len != NULL));
+
+    *payload = NULL;
+    *payload_len = 0U;
+
+    if (frame_len < PN532_FRAME_HEADER_SIZE)
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if ((frame[PN532_FRAME_PREAMBLE_OFFSET] != PN532_PREAMBLE) ||
+        (frame[PN532_FRAME_STARTCODE1_OFFSET] != PN532_STARTCODE1) ||
+        (frame[PN532_FRAME_STARTCODE2_OFFSET] != PN532_STARTCODE2))
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if ((frame[PN532_FRAME_LEN_OFFSET] == PN532_EXTENDED_FRAME_MARKER) &&
+        (frame[PN532_FRAME_LCS_OFFSET] == PN532_EXTENDED_FRAME_MARKER))
+    {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    const uint8_t data_len = frame[PN532_FRAME_LEN_OFFSET];
+    const uint8_t checksum_len = frame[PN532_FRAME_LEN_OFFSET] + frame[PN532_FRAME_LCS_OFFSET];
+
+    if ((data_len == 0U) ||
+        (checksum_len != 0U))
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    const size_t expected_frame_len = PN532_FRAME_HEADER_SIZE + data_len + 2U;
+    if (frame_len != expected_frame_len)
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (frame[PN532_FRAME_DATA_OFFSET + data_len + 1U] != PN532_POSTAMBLE)
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    uint8_t checksum = 0U;
+    for (size_t i = PN532_FRAME_DATA_OFFSET; i < (frame_len - 1U); i++)
+    {
+        checksum += frame[i];
+    }
+
+    if (checksum != 0U)
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if ((data_len == 1U) &&
+        (frame[PN532_FRAME_DATA_OFFSET] == PN532_ERROR_CODE))
+    {
+        return ESP_FAIL;
+    }
+
+    if ((data_len < 2U) ||
+        (frame[PN532_FRAME_DATA_OFFSET] != PN532_RESPONSE_TFI) ||
+        (frame[PN532_FRAME_COMMAND_OFFSET] != expected_command))
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    *payload = frame + PN532_FRAME_COMMAND_OFFSET + 1U;
+    *payload_len = data_len - 2U;
+
+    return ESP_OK;
 }
