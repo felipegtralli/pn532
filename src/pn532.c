@@ -1,4 +1,5 @@
 #include "pn532.h"
+#include "esp_err.h"
 #include "pn532_internal.h"
 
 #include <assert.h>
@@ -9,13 +10,30 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "portmacro.h"
 
-#define PN532_MAX_CARDS 1U
+#define PN532_MAX_TARGETS 1U
 
 #define PN532_VERSION_SIZE 4U
 
 #define PN532_VERSION_RESPONSE_SIZE 13U
 #define PN532_SAM_RESPONSE_SIZE 9U
+#define PN532_RF_CONFIGURATION_RESPONSE_SIZE 9U
+
+#define PN532_TYPE_A_TARGET_COUNT_OFFSET 0U
+#define PN532_TYPE_A_TARGET_NUMBER_OFFSET 1U
+#define PN532_TYPE_A_UID_LENGTH_OFFSET 5U
+#define PN532_TYPE_A_UID_OFFSET 6U
+
+#define PN532_TYPE_A_TARGET_COUNT_SIZE 1U
+#define PN532_TYPE_A_TARGET_HEADER_SIZE 6U
+#define PN532_TYPE_A_NO_TARGETS 0U
+#define PN532_TYPE_A_EXPECTED_TARGET_COUNT 1U
+#define PN532_TYPE_A_FIRST_TARGET_NUMBER 1U
+
+#define PN532_TYPE_A_UID_SINGLE_SIZE 4U
+#define PN532_TYPE_A_UID_DOUBLE_SIZE 7U
+#define PN532_TYPE_A_UID_TRIPLE_SIZE 10U
 
 #define PN532_DEFAULT_TIMEOUT 1000U
 #define PN532_MUTEX_TIMEOUT_MS 1000U
@@ -93,6 +111,60 @@ static esp_err_t pn532_recv_response(PN532 *pn532, uint8_t expected_command, siz
             (void)memcpy(response, payload, payload_len);
         }
     }
+
+    return ESP_OK;
+}
+
+/* UM0701-02 Rev. 02, §7.3.5, pp. 115–118: Type A target data and cascaded UID layout. */
+static esp_err_t pn532_parse_type_a_uid(const uint8_t *response, size_t response_len, uint8_t *uid, size_t uid_size, size_t *uid_len)
+{
+    assert((response != NULL) &&
+           (uid != NULL) &&
+           (uid_len != NULL));
+
+    *uid_len = 0U;
+
+    if (response_len < PN532_TYPE_A_TARGET_COUNT_SIZE)
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (response[PN532_TYPE_A_TARGET_COUNT_OFFSET] == PN532_TYPE_A_NO_TARGETS)
+    {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    if (response_len < PN532_TYPE_A_TARGET_HEADER_SIZE)
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if ((response[PN532_TYPE_A_TARGET_COUNT_OFFSET] != PN532_TYPE_A_EXPECTED_TARGET_COUNT) ||
+        (response[PN532_TYPE_A_TARGET_NUMBER_OFFSET] != PN532_TYPE_A_FIRST_TARGET_NUMBER))
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    const size_t uid_length = response[PN532_TYPE_A_UID_LENGTH_OFFSET];
+    if ((uid_length != PN532_TYPE_A_UID_SINGLE_SIZE) &&
+        (uid_length != PN532_TYPE_A_UID_DOUBLE_SIZE) &&
+        (uid_length != PN532_TYPE_A_UID_TRIPLE_SIZE))
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (uid_length > (response_len - PN532_TYPE_A_UID_OFFSET))
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    *uid_len = uid_length;
+    if (uid_size < uid_length)
+    {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    (void)memcpy(uid, &response[PN532_TYPE_A_UID_OFFSET], uid_length);
 
     return ESP_OK;
 }
@@ -336,14 +408,14 @@ esp_err_t pn532_get_firmware_version(PN532Handle pn532_handle, uint8_t *version_
 
     PN532 *pn532 = pn532_handle;
 
+    const uint8_t firmware_command[] = {PN532_COMMAND_GETFIRMWAREVERSION};
+
     BaseType_t mutex_res = xSemaphoreTake(pn532->mutex, pdMS_TO_TICKS(PN532_MUTEX_TIMEOUT_MS));
     if (mutex_res != pdTRUE)
     {
         ESP_LOGE(TAG, "PN532 get firmware version failed to take mutex: %s", esp_err_to_name(ESP_ERR_TIMEOUT));
         return ESP_ERR_TIMEOUT;
     }
-
-    const uint8_t firmware_command[] = {PN532_COMMAND_GETFIRMWAREVERSION};
 
     esp_err_t status = pn532->write_command(pn532, firmware_command, sizeof(firmware_command));
     if (status == ESP_OK)
@@ -380,7 +452,7 @@ esp_err_t pn532_SAM_configuration(PN532Handle pn532_handle)
 
     PN532 *pn532 = pn532_handle;
 
-    uint8_t sam_command[] = {
+    const uint8_t sam_command[] = {
         PN532_COMMAND_SAMCONFIGURATION,
         0x01, /* normal mode */
         0x14, /* ignored in normal mode */
@@ -420,76 +492,115 @@ esp_err_t pn532_SAM_configuration(PN532Handle pn532_handle)
     return status;
 }
 
-// esp_err_t pn532_set_passive_activation_retries(PN532Handle pn532_handle, uint8_t max_retries)
-// {
-//     if (!pn532_handle)
-//     {
-//         return ESP_ERR_INVALID_ARG;
-//     }
+esp_err_t pn532_set_passive_activation_retries(PN532Handle pn532_handle, uint8_t max_retries)
+{
+    if (!pn532_handle)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
 
-//     PN532 *pn532 = pn532_handle;
+    PN532 *pn532 = pn532_handle;
 
-//     uint8_t command[] = {
-//         PN532_COMMAND_RFCONFIGURATION,
-//         0x05, // configuration item
-//         0xFF, // MxRtyATR (default 0xFF)
-//         0x01, // MxRtyPSL (default 0x01)
-//         max_retries,
-//     };
+    const uint8_t rf_config_command[] = {
+        PN532_COMMAND_RFCONFIGURATION,
+        0x05, /* maxretries config */
+        0xFF, /* MxRtyATR default */
+        0x01, /* MxRtyPSL default */
+        max_retries,
+    };
 
-// #ifdef PN532_DEBUG
-//     ESP_LOGD(TAG, "setting passive activation retries: %02X", max_retries);
-// #endif
+    BaseType_t mutex_res = xSemaphoreTake(pn532->mutex, pdMS_TO_TICKS(PN532_MUTEX_TIMEOUT_MS));
+    if (mutex_res != pdTRUE)
+    {
+        ESP_LOGE(TAG, "PN532 set passive activation retries failed to take mutex: %s", esp_err_to_name(ESP_ERR_TIMEOUT));
+        return ESP_ERR_TIMEOUT;
+    }
 
-//     esp_err_t err = pn532_send_command_check_ack(pn532, command, sizeof(command), PN532_DEFAULT_TIMEOUT);
-//     if (err != ESP_OK)
-//     {
-//         ESP_LOGE(TAG, "failed to set passive activation retries");
-//         return err;
-//     }
+    esp_err_t status = pn532->write_command(pn532, rf_config_command, sizeof(rf_config_command));
+    if (status == ESP_OK)
+    {
+        size_t response_len = 0U;
+        const uint8_t expected_command = PN532_COMMAND_RFCONFIGURATION + 1U;
 
-//     return ESP_OK;
-// }
+        status = pn532_recv_response(pn532, expected_command, PN532_RF_CONFIGURATION_RESPONSE_SIZE, NULL, 0U, &response_len, pdMS_TO_TICKS(PN532_DEFAULT_TIMEOUT));
+        if (status == ESP_OK)
+        {
+            if (response_len != 0U)
+            {
+                status = ESP_ERR_INVALID_RESPONSE;
+            }
+        }
+    }
 
-// esp_err_t pn532_read_passive_target_id(PN532Handle pn532_handle, uint8_t card_baud_rate, uint8_t *uid, size_t *uid_len)
-// {
-//     if (!pn532_handle || !uid || !uid_len)
-//     {
-//         return ESP_ERR_INVALID_ARG;
-//     }
+    mutex_res = xSemaphoreGive(pn532->mutex);
+    if ((mutex_res != pdTRUE) &&
+        (status == ESP_OK))
+    {
+        status = ESP_FAIL;
+    }
 
-//     PN532 *pn532 = pn532_handle;
+    return status;
+}
 
-//     uint8_t command[] = {
-//         PN532_COMMAND_INLISTPASSIVETARGET,
-//         PN532_MAX_CARDS,
-//         card_baud_rate,
-//     };
-//     esp_err_t err = pn532_send_command_check_ack(pn532, command, sizeof(command), PN532_DEFAULT_TIMEOUT);
-//     if (err != ESP_OK)
-//     {
-//         ESP_LOGE(TAG, "failed to read passive target id");
-//         return err;
-//     }
+esp_err_t pn532_read_passive_target_id(PN532Handle pn532_handle, uint8_t card_baud_rate, uint8_t *uid, size_t *uid_len)
+{
+    if (uid_len == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
 
-//     uint8_t response[20];
-//     size_t len = sizeof(response);
-//     memcpy(response, (pn532->buffer + ACK_OFFSET), len);
+    const size_t uid_size = *uid_len;
+    *uid_len = 0U;
 
-//     if (!response[7])
-//     {
-//         ESP_LOGW(TAG, "no card detected");
-//         return ESP_ERR_NOT_FOUND;
-//     }
+    if ((pn532_handle == NULL) ||
+        (uid == NULL))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
 
-//     *uid_len = response[12];
-//     for (size_t i = 0; i < *uid_len; i++)
-//     {
-//         uid[i] = response[13 + i];
-//     }
+    if (card_baud_rate != PN532_MIFARE_ISO14443A)
+    {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
 
-//     return ESP_OK;
-// }
+    PN532 *pn532 = pn532_handle;
+
+    const uint8_t list_passive_target_command[] = {
+        PN532_COMMAND_INLISTPASSIVETARGET,
+        PN532_MAX_TARGETS,
+        card_baud_rate,
+    };
+
+    BaseType_t mutex_res = xSemaphoreTake(pn532->mutex, pdMS_TO_TICKS(PN532_MUTEX_TIMEOUT_MS));
+    if (mutex_res != pdTRUE)
+    {
+        ESP_LOGE(TAG, "PN532 read passive target id failed to take mutex: %s", esp_err_to_name(ESP_ERR_TIMEOUT));
+        return ESP_ERR_TIMEOUT;
+    }
+
+    esp_err_t status = pn532->write_command(pn532, list_passive_target_command, sizeof(list_passive_target_command));
+    if (status == ESP_OK)
+    {
+        uint8_t response[sizeof(pn532->buffer)];
+        size_t response_len = 0U;
+        const uint8_t expected_command = PN532_COMMAND_INLISTPASSIVETARGET + 1U;
+
+        status = pn532_recv_response(pn532, expected_command, sizeof(response), response, sizeof(response), &response_len, pdMS_TO_TICKS(PN532_DEFAULT_TIMEOUT));
+        if (status == ESP_OK)
+        {
+            status = pn532_parse_type_a_uid(response, response_len, uid, uid_size, uid_len);
+        }
+    }
+
+    mutex_res = xSemaphoreGive(pn532->mutex);
+    if ((mutex_res != pdTRUE) &&
+        (status == ESP_OK))
+    {
+        return ESP_FAIL;
+    }
+
+    return status;
+}
 
 // esp_err_t pn532_read_gpio(PN532Handle pn532_handle, uint8_t *gpio_state)
 // {
