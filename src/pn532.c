@@ -15,10 +15,12 @@
 #define PN532_MAX_TARGETS 1U
 
 #define PN532_VERSION_SIZE 4U
+#define PN532_GPIO_STATE_SIZE 3U
 
 #define PN532_VERSION_RESPONSE_SIZE 13U
 #define PN532_SAM_RESPONSE_SIZE 9U
 #define PN532_RF_CONFIGURATION_RESPONSE_SIZE 9U
+#define PN532_GPIO_RESPONSE_SIZE 12U
 
 #define PN532_TYPE_A_TARGET_COUNT_OFFSET 0U
 #define PN532_TYPE_A_TARGET_NUMBER_OFFSET 1U
@@ -602,34 +604,57 @@ esp_err_t pn532_read_passive_target_id(PN532Handle pn532_handle, uint8_t card_ba
     return status;
 }
 
-// esp_err_t pn532_read_gpio(PN532Handle pn532_handle, uint8_t *gpio_state)
-// {
-//     if (!pn532_handle)
-//     {
-//         return ESP_ERR_INVALID_ARG;
-//     }
+esp_err_t pn532_read_gpio(PN532Handle pn532_handle, uint8_t *gpio_state, size_t gpio_size)
+{
+    if ((pn532_handle == NULL) ||
+        (gpio_state == NULL))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
 
-//     PN532 *pn532 = pn532_handle;
+    if (gpio_size < PN532_GPIO_STATE_SIZE)
+    {
+        return ESP_ERR_INVALID_SIZE;
+    }
 
-//     uint8_t command[] = {
-//         PN532_COMMAND_READGPIO,
-//     };
-//     size_t len = sizeof(command);
+    PN532 *pn532 = pn532_handle;
 
-//     esp_err_t err = pn532_send_command_check_ack(pn532, command, len, PN532_DEFAULT_TIMEOUT);
-//     if (err != ESP_OK)
-//     {
-//         ESP_LOGE(TAG, "failed to read GPIO");
-//         return err;
-//     }
+    const uint8_t read_gpio_command[] = {PN532_COMMAND_READGPIO};
 
-//     uint8_t response[11];
-//     len = sizeof(response);
-//     memcpy(response, (pn532->buffer + ACK_OFFSET), len);
+    BaseType_t mutex_res = xSemaphoreTake(pn532->mutex, pdMS_TO_TICKS(PN532_MUTEX_TIMEOUT_MS));
+    if (mutex_res != pdTRUE)
+    {
+        ESP_LOGE(TAG, "PN532 read GPIO failed to take mutex: %s", esp_err_to_name(ESP_ERR_TIMEOUT));
+        return ESP_ERR_TIMEOUT;
+    }
 
-//     gpio_state[0] = response[7]; // P3
-//     gpio_state[1] = response[8]; // P7
-//     gpio_state[2] = response[9]; // I0
+    esp_err_t status = pn532->write_command(pn532, read_gpio_command, sizeof(read_gpio_command));
+    if (status == ESP_OK)
+    {
+        uint8_t response[PN532_GPIO_STATE_SIZE];
+        size_t response_len = 0U;
+        const uint8_t expected_command = PN532_COMMAND_READGPIO + 1U;
 
-//     return ESP_OK;
-// }
+        status = pn532_recv_response(pn532, expected_command, PN532_GPIO_RESPONSE_SIZE, response, sizeof(response), &response_len, pdMS_TO_TICKS(PN532_DEFAULT_TIMEOUT));
+        if (status == ESP_OK)
+        {
+            if (response_len != PN532_GPIO_STATE_SIZE)
+            {
+                status = ESP_ERR_INVALID_RESPONSE;
+            }
+            else
+            {
+                (void)memcpy(gpio_state, response, sizeof(response));
+            }
+        }
+    }
+
+    mutex_res = xSemaphoreGive(pn532->mutex);
+    if ((mutex_res != pdTRUE) &&
+        (status == ESP_OK))
+    {
+        status = ESP_FAIL;
+    }
+
+    return status;
+}
