@@ -3,21 +3,16 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+
+#include "pn532.h"
 #include "pn532_internal.h"
 
-#define PN532_FRAME_PREAMBLE_OFFSET 0U
-#define PN532_FRAME_STARTCODE1_OFFSET 1U
-#define PN532_FRAME_STARTCODE2_OFFSET 2U
-#define PN532_FRAME_LEN_OFFSET 3U
-#define PN532_FRAME_LCS_OFFSET 4U
 #define PN532_FRAME_DATA_OFFSET 5U
 #define PN532_FRAME_COMMAND_OFFSET 6U
 
-#define PN532_FRAME_HEADER_SIZE 5U
-#define PN532_EXTENDED_FRAME_MARKER 0xFFU
-
-#define PN532_RESPONSE_TFI 0xD5U
+#define PN532_HOSTTOPN532 0xD4
 #define PN532_ERROR_CODE 0x7FU
+#define PN532_RESPONSE_TFI 0xD5U
 
 size_t pn532_command_framer(const uint8_t *command, size_t command_len, uint8_t *frame)
 {
@@ -52,40 +47,15 @@ size_t pn532_command_framer(const uint8_t *command, size_t command_len, uint8_t 
 esp_err_t pn532_response_parser(const uint8_t *frame, size_t frame_len, uint8_t expected_command, const uint8_t **payload, size_t *payload_len)
 {
     assert((frame != NULL) &&
+           (frame_len >= PN532_FRAME_HEADER_SIZE) &&
            (payload != NULL) &&
            (payload_len != NULL));
 
     *payload = NULL;
     *payload_len = 0U;
 
-    if (frame_len < PN532_FRAME_HEADER_SIZE)
-    {
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-
-    if ((frame[PN532_FRAME_PREAMBLE_OFFSET] != PN532_PREAMBLE) ||
-        (frame[PN532_FRAME_STARTCODE1_OFFSET] != PN532_STARTCODE1) ||
-        (frame[PN532_FRAME_STARTCODE2_OFFSET] != PN532_STARTCODE2))
-    {
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-
-    if ((frame[PN532_FRAME_LEN_OFFSET] == PN532_EXTENDED_FRAME_MARKER) &&
-        (frame[PN532_FRAME_LCS_OFFSET] == PN532_EXTENDED_FRAME_MARKER))
-    {
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-
     const uint8_t data_len = frame[PN532_FRAME_LEN_OFFSET];
-    const uint8_t checksum_len = frame[PN532_FRAME_LEN_OFFSET] + frame[PN532_FRAME_LCS_OFFSET];
-
-    if ((data_len == 0U) ||
-        (checksum_len != 0U))
-    {
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-
-    const size_t expected_frame_len = PN532_FRAME_HEADER_SIZE + data_len + 2U;
+    const size_t expected_frame_len = PN532_FRAME_HEADER_SIZE + data_len + PN532_FRAME_TRAILER_SIZE;
     if (frame_len != expected_frame_len)
     {
         return ESP_ERR_INVALID_RESPONSE;

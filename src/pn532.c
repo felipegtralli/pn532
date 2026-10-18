@@ -1,26 +1,27 @@
-#include "pn532.h"
-#include "esp_err.h"
-#include "pn532_internal.h"
-
 #include <assert.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_err.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "freertos/task.h"
-#include "portmacro.h"
+
+#include "pn532.h"
+#include "pn532_internal.h"
+
+#define PN532_DEFAULT_TIMEOUT 1000U
+#define PN532_MUTEX_TIMEOUT_MS 1000U
+
+#define PN532_EXTENDED_FRAME_MARKER 0xFFU
+
+#define PN532_GPIO_STATE_SIZE 3U
+#define PN532_VERSION_SIZE 4U
 
 #define PN532_MAX_TARGETS 1U
-
-#define PN532_VERSION_SIZE 4U
-#define PN532_GPIO_STATE_SIZE 3U
-
-#define PN532_VERSION_RESPONSE_SIZE 13U
-#define PN532_SAM_RESPONSE_SIZE 9U
-#define PN532_RF_CONFIGURATION_RESPONSE_SIZE 9U
-#define PN532_GPIO_RESPONSE_SIZE 12U
 
 #define PN532_TYPE_A_TARGET_COUNT_OFFSET 0U
 #define PN532_TYPE_A_TARGET_NUMBER_OFFSET 1U
@@ -36,9 +37,6 @@
 #define PN532_TYPE_A_UID_SINGLE_SIZE 4U
 #define PN532_TYPE_A_UID_DOUBLE_SIZE 7U
 #define PN532_TYPE_A_UID_TRIPLE_SIZE 10U
-
-#define PN532_DEFAULT_TIMEOUT 1000U
-#define PN532_MUTEX_TIMEOUT_MS 1000U
 
 static const char *TAG = "pn532-driver";
 
@@ -65,7 +63,94 @@ static esp_err_t pn532_read_check_ack(PN532 *pn532, size_t *bytes_read, TickType
     return (cmp == 0) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
 }
 
-static esp_err_t pn532_recv_response(PN532 *pn532, uint8_t expected_command, size_t read_size, uint8_t *response, size_t response_size, size_t *response_len, TickType_t timeout)
+/*
+ * UM0701-02 Rev. 02, §6.2.1.1–2, pp. 28–29: normal frames contain a five-byte
+ * header, LEN data bytes, DCS, and postamble. Validate the header before trusting LEN.
+ * The timeout applies to each transport read, not to the whole transaction.
+ */
+static esp_err_t pn532_read_frame(PN532 *pn532, size_t *frame_len, TickType_t timeout)
+{
+    assert((pn532 != NULL) &&
+           (frame_len != NULL));
+
+    *frame_len = 0U;
+
+    size_t bytes_read = 0U;
+    esp_err_t status = pn532->read_response(pn532, pn532->buffer, PN532_FRAME_HEADER_SIZE, &bytes_read, timeout);
+    if (status != ESP_OK)
+    {
+        return status;
+    }
+
+    if (bytes_read != PN532_FRAME_HEADER_SIZE)
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    if ((pn532->buffer[PN532_FRAME_PREAMBLE_OFFSET] != PN532_PREAMBLE) ||
+        (pn532->buffer[PN532_FRAME_STARTCODE1_OFFSET] != PN532_STARTCODE1) ||
+        (pn532->buffer[PN532_FRAME_STARTCODE2_OFFSET] != PN532_STARTCODE2))
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if ((pn532->buffer[PN532_FRAME_LEN_OFFSET] == PN532_EXTENDED_FRAME_MARKER) &&
+        (pn532->buffer[PN532_FRAME_LCS_OFFSET] == PN532_EXTENDED_FRAME_MARKER))
+    {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    const uint8_t data_len = pn532->buffer[PN532_FRAME_LEN_OFFSET];
+    const uint8_t checksum_len = data_len + pn532->buffer[PN532_FRAME_LCS_OFFSET];
+    if ((data_len == 0U) ||
+        (checksum_len != 0U))
+    {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    const size_t remaining_size = (size_t)data_len + PN532_FRAME_TRAILER_SIZE;
+    const size_t total_size = PN532_FRAME_HEADER_SIZE + remaining_size;
+    if (total_size > sizeof(pn532->buffer))
+    {
+        /* Drain only this normal frame; LEN bounds this loop to at most two reads. */
+        size_t bytes_remaining = remaining_size;
+        while (bytes_remaining > 0U)
+        {
+            const size_t read_size = bytes_remaining < sizeof(pn532->buffer) ? bytes_remaining : sizeof(pn532->buffer);
+            status = pn532->read_response(pn532, pn532->buffer, read_size, &bytes_read, timeout);
+            if (status != ESP_OK)
+            {
+                return status;
+            }
+
+            if (bytes_read != read_size)
+            {
+                return ESP_ERR_TIMEOUT;
+            }
+
+            bytes_remaining -= bytes_read;
+        }
+
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    status = pn532->read_response(pn532, pn532->buffer + PN532_FRAME_HEADER_SIZE, remaining_size, &bytes_read, timeout);
+    if (status != ESP_OK)
+    {
+        return status;
+    }
+
+    if (bytes_read != remaining_size)
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    *frame_len = total_size;
+
+    return ESP_OK;
+}
+
+static esp_err_t pn532_recv_response(PN532 *pn532, uint8_t expected_command, uint8_t *response, size_t response_size, size_t *response_len, TickType_t timeout)
 {
     assert((pn532 != NULL) &&
            (response_len != NULL));
@@ -73,20 +158,14 @@ static esp_err_t pn532_recv_response(PN532 *pn532, uint8_t expected_command, siz
     *response_len = 0U;
 
     size_t bytes_read = 0U;
-
-    if ((read_size == 0U) ||
-        (read_size > sizeof(pn532->buffer)))
-    {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
     esp_err_t status = pn532_read_check_ack(pn532, &bytes_read, timeout);
     if (status != ESP_OK)
     {
         return status;
     }
 
-    status = pn532->read_response(pn532, pn532->buffer, read_size, &bytes_read, timeout);
+    size_t frame_len = 0U;
+    status = pn532_read_frame(pn532, &frame_len, timeout);
     if (status != ESP_OK)
     {
         return status;
@@ -95,7 +174,7 @@ static esp_err_t pn532_recv_response(PN532 *pn532, uint8_t expected_command, siz
     const uint8_t *payload = NULL;
     size_t payload_len = 0U;
 
-    status = pn532_response_parser(pn532->buffer, bytes_read, expected_command, &payload, &payload_len);
+    status = pn532_response_parser(pn532->buffer, frame_len, expected_command, &payload, &payload_len);
     if (status != ESP_OK)
     {
         return status;
@@ -377,7 +456,7 @@ esp_err_t pn532_exec_command(PN532Handle pn532_handle,
     if (status == ESP_OK)
     {
         const uint8_t expected_command = command[0] + 1U;
-        status = pn532_recv_response(pn532, expected_command, sizeof(pn532->buffer), response, response_size, response_len, pdMS_TO_TICKS(timeout));
+        status = pn532_recv_response(pn532, expected_command, response, response_size, response_len, pdMS_TO_TICKS(timeout));
     }
 
     mutex_res = xSemaphoreGive(pn532_handle->mutex);
@@ -425,7 +504,7 @@ esp_err_t pn532_get_firmware_version(PN532Handle pn532_handle, uint8_t *version_
         size_t response_len = 0U;
         const uint8_t expected_command = PN532_COMMAND_GETFIRMWAREVERSION + 1U;
 
-        status = pn532_recv_response(pn532, expected_command, PN532_VERSION_RESPONSE_SIZE, version_buffer, version_size, &response_len, pdMS_TO_TICKS(PN532_DEFAULT_TIMEOUT));
+        status = pn532_recv_response(pn532, expected_command, version_buffer, version_size, &response_len, pdMS_TO_TICKS(PN532_DEFAULT_TIMEOUT));
         if (status == ESP_OK)
         {
             if (response_len != PN532_VERSION_SIZE)
@@ -474,7 +553,7 @@ esp_err_t pn532_SAM_configuration(PN532Handle pn532_handle)
         size_t response_len = 0U;
         const uint8_t expected_command = PN532_COMMAND_SAMCONFIGURATION + 1U;
 
-        status = pn532_recv_response(pn532, expected_command, PN532_SAM_RESPONSE_SIZE, NULL, 0U, &response_len, pdMS_TO_TICKS(PN532_DEFAULT_TIMEOUT));
+        status = pn532_recv_response(pn532, expected_command, NULL, 0U, &response_len, pdMS_TO_TICKS(PN532_DEFAULT_TIMEOUT));
         if (status == ESP_OK)
         {
             if (response_len != 0U)
@@ -524,7 +603,7 @@ esp_err_t pn532_set_passive_activation_retries(PN532Handle pn532_handle, uint8_t
         size_t response_len = 0U;
         const uint8_t expected_command = PN532_COMMAND_RFCONFIGURATION + 1U;
 
-        status = pn532_recv_response(pn532, expected_command, PN532_RF_CONFIGURATION_RESPONSE_SIZE, NULL, 0U, &response_len, pdMS_TO_TICKS(PN532_DEFAULT_TIMEOUT));
+        status = pn532_recv_response(pn532, expected_command, NULL, 0U, &response_len, pdMS_TO_TICKS(PN532_DEFAULT_TIMEOUT));
         if (status == ESP_OK)
         {
             if (response_len != 0U)
@@ -587,7 +666,7 @@ esp_err_t pn532_read_passive_target_id(PN532Handle pn532_handle, uint8_t card_ba
         size_t response_len = 0U;
         const uint8_t expected_command = PN532_COMMAND_INLISTPASSIVETARGET + 1U;
 
-        status = pn532_recv_response(pn532, expected_command, sizeof(response), response, sizeof(response), &response_len, pdMS_TO_TICKS(PN532_DEFAULT_TIMEOUT));
+        status = pn532_recv_response(pn532, expected_command, response, sizeof(response), &response_len, pdMS_TO_TICKS(PN532_DEFAULT_TIMEOUT));
         if (status == ESP_OK)
         {
             status = pn532_parse_type_a_uid(response, response_len, uid, uid_size, uid_len);
@@ -635,7 +714,7 @@ esp_err_t pn532_read_gpio(PN532Handle pn532_handle, uint8_t *gpio_state, size_t 
         size_t response_len = 0U;
         const uint8_t expected_command = PN532_COMMAND_READGPIO + 1U;
 
-        status = pn532_recv_response(pn532, expected_command, PN532_GPIO_RESPONSE_SIZE, response, sizeof(response), &response_len, pdMS_TO_TICKS(PN532_DEFAULT_TIMEOUT));
+        status = pn532_recv_response(pn532, expected_command, response, sizeof(response), &response_len, pdMS_TO_TICKS(PN532_DEFAULT_TIMEOUT));
         if (status == ESP_OK)
         {
             if (response_len != PN532_GPIO_STATE_SIZE)

@@ -1,8 +1,6 @@
 #ifndef PN532_INTERNAL_H
 #define PN532_INTERNAL_H
 
-#include "pn532.h"
-
 #include <stddef.h>
 #include <stdint.h>
 
@@ -10,15 +8,27 @@
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "sdkconfig.h"
 
-#if CONFIG_LOG_DEFAULT_LEVEL >= 4 // 4 = LOG_LEVEL_DEBUG
-#define PN532_DEBUG
-#endif
+#include "pn532.h"
+
+#define PN532_BUFFER_SIZE 256
+
+#define PN532_PREAMBLE 0x00
+#define PN532_STARTCODE1 0x00
+#define PN532_STARTCODE2 0xFF
+#define PN532_POSTAMBLE 0x00
+
+#define PN532_FRAME_PREAMBLE_OFFSET 0U
+#define PN532_FRAME_STARTCODE1_OFFSET 1U
+#define PN532_FRAME_STARTCODE2_OFFSET 2U
+#define PN532_FRAME_LEN_OFFSET 3U
+#define PN532_FRAME_LCS_OFFSET 4U
+
+#define PN532_FRAME_HEADER_SIZE 5U
+#define PN532_FRAME_TRAILER_SIZE 2U
+#define PN532_FRAME_OVERHEAD 8U
 
 #define PN532_NORMAL_COMMAND_MAX_LEN 254U
-#define PN532_FRAME_OVERHEAD 8U
-#define PN532_BUFFER_SIZE 256
 
 typedef esp_err_t (*pn532_start_fn)(struct PN532 *pn532);
 typedef esp_err_t (*pn532_write_command_fn)(struct PN532 *pn532, const uint8_t *command, uint8_t command_len);

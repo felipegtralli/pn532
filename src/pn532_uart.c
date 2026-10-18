@@ -1,29 +1,31 @@
-#include "driver/uart.h"
-#include "esp_rom_sys.h"
-#include "pn532.h"
-#include "pn532_internal.h"
-
-#include "esp_log.h"
-
 #include <assert.h>
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-#define PN532_UART_BAUD_RATE 115200U
+#include "driver/uart.h"
+#include "esp_err.h"
+#include "esp_rom_sys.h"
+#include "freertos/FreeRTOS.h"
 
-#define PN532_UART_START_TIMEOUT_MS 1000U
-#define PN532_UART_WAKEUP_DELAY_US 5000U
+#include "pn532.h"
+#include "pn532_internal.h"
+
+#define PN532_WAKEUP 0x55
+
+#define PN532_UART_BAUD_RATE 115200U
 
 #define PN532_UART_RX_BUF_SIZE 256U
 #define PN532_UART_TX_BUF_SIZE 256U
 
 #define PN532_UART_PREAMBLE_SIZE 5U
 
+#define PN532_UART_START_TIMEOUT_MS 1000U
 #define PN532_UART_TX_TIMEOUT_MS 1000U
+#define PN532_UART_WAKEUP_DELAY_US 5000U
 
 #define UART_PORT(pn532) ((pn532)->uart.uart_port)
-
-static const char *TAG = "pn532";
 
 static const uint8_t pn532_uart_preamble[] = {0x55U, 0x55U, 0x00U, 0x00U, 0x00U};
 
@@ -140,7 +142,6 @@ static esp_err_t pn532_uart_free(PN532 *pn532)
     esp_err_t err = uart_driver_delete(UART_PORT(pn532));
     if (err != ESP_OK)
     {
-        ESP_LOGE(TAG, "uart_driver_delete failed: %d", err);
         return err;
     }
 
