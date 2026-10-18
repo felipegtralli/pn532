@@ -17,11 +17,5 @@ menu "Example Configuration"
         default 0
         help
             Select the UART port.
-
-    config UART_BAUD_RATE
-        int "Baud rate"
-        default 115200
-        help
-            Select the baud rate for UART.
     
 endmenu
