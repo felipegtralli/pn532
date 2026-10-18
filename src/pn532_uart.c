@@ -25,8 +25,6 @@
 #define PN532_UART_TX_TIMEOUT_MS 1000U
 #define PN532_UART_WAKEUP_DELAY_US 5000U
 
-#define UART_PORT(pn532) ((pn532)->uart.uart_port)
-
 static const uint8_t pn532_uart_preamble[] = {0x55U, 0x55U, 0x00U, 0x00U, 0x00U};
 
 /*
@@ -139,13 +137,9 @@ static esp_err_t pn532_uart_read_response(PN532 *pn532, uint8_t *buffer, size_t 
 
 static esp_err_t pn532_uart_free(PN532 *pn532)
 {
-    esp_err_t err = uart_driver_delete(UART_PORT(pn532));
-    if (err != ESP_OK)
-    {
-        return err;
-    }
+    assert(pn532 != NULL);
 
-    return ESP_OK;
+    return uart_driver_delete(pn532->uart.uart_port);
 }
 
 esp_err_t pn532_uart_init(PN532 *pn532, const PN532UartConfig *config)
