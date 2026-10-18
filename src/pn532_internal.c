@@ -1,3 +1,9 @@
+/**
+ * @file pn532_internal.c
+ * @brief Shared normal-frame encoding and response validation, without I/O.
+ *
+ * Frame layout: UM0701-02 Rev. 02, Section 6.2.1.1, p. 28.
+ */
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -19,6 +25,7 @@ size_t pn532_command_framer(const uint8_t *command, size_t command_len, uint8_t 
     assert((command != NULL) &&
            (frame != NULL));
 
+    /* LEN includes TFI; byte-sized checksum arithmetic keeps only the low eight bits. */
     const uint8_t data_len = command_len + 1U;
     uint8_t checksum = PN532_HOSTTOPN532;
 
@@ -77,6 +84,7 @@ esp_err_t pn532_response_parser(const uint8_t *frame, size_t frame_len, uint8_t 
         return ESP_ERR_INVALID_RESPONSE;
     }
 
+    /* UM0701-02 Rev. 02, Section 6.2.1.5, p. 31: error frames have no TFI or response ID. */
     if ((data_len == 1U) &&
         (frame[PN532_FRAME_DATA_OFFSET] == PN532_ERROR_CODE))
     {

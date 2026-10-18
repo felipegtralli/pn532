@@ -1,3 +1,9 @@
+/**
+ * @file pn532.c
+ * @brief Handle lifecycle, command exchanges, and public command wrappers.
+ *
+ * The core locks complete exchanges; transport callbacks do not lock the handle.
+ */
 #include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -40,6 +46,7 @@
 
 static const char *TAG = "pn532-driver";
 
+/* UM0701-02 Rev. 02, Section 6.2.1.3, p. 30: ACK confirms command reception only. */
 static const uint8_t PN532_ACK[] = {0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00};
 
 static esp_err_t pn532_read_check_ack(PN532 *pn532, size_t *bytes_read, TickType_t timeout)
@@ -112,7 +119,7 @@ static esp_err_t pn532_read_frame(PN532 *pn532, size_t *frame_len, TickType_t ti
     const size_t total_size = PN532_FRAME_HEADER_SIZE + remaining_size;
     if (total_size > sizeof(pn532->buffer))
     {
-        /* Drain only this normal frame; LEN bounds this loop to at most two reads. */
+        /* Discard this frame without consuming the next; LEN bounds this to two reads. */
         size_t bytes_remaining = remaining_size;
         while (bytes_remaining > 0U)
         {
@@ -180,6 +187,7 @@ static esp_err_t pn532_recv_response(PN532 *pn532, uint8_t expected_command, uin
         return status;
     }
 
+    /* The frame is consumed; report the required size even if the destination is too small. */
     *response_len = payload_len;
     if (response != NULL)
     {
@@ -352,6 +360,7 @@ esp_err_t pn532_free(PN532Handle pn532_handle)
     if (status == ESP_OK)
     {
 
+        /* Keep the handle valid if transport cleanup fails. */
         status = pn532->free(pn532);
         if (status != ESP_OK)
         {
@@ -662,6 +671,7 @@ esp_err_t pn532_read_passive_target_id(PN532Handle pn532_handle, uint8_t card_ba
     esp_err_t status = pn532->write_command(pn532, list_passive_target_command, sizeof(list_passive_target_command));
     if (status == ESP_OK)
     {
+        /* Keep the payload separate from frame scratch space to avoid overlapping copies. */
         uint8_t response[sizeof(pn532->buffer)];
         size_t response_len = 0U;
         const uint8_t expected_command = PN532_COMMAND_INLISTPASSIVETARGET + 1U;

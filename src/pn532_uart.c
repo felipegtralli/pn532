@@ -1,3 +1,12 @@
+/**
+ * @file pn532_uart.c
+ * @brief ESP-IDF UART (HSU) transport for the PN532.
+ *
+ * Installs and owns the selected UART driver, configured for 115200 baud,
+ * 8 data bits, no parity, one stop bit, and no hardware flow control.
+ * UART transmit waits each use a fixed 1000 ms timeout, independently of
+ * the core's transaction-mutex and receive waits.
+ */
 #include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -25,12 +34,18 @@
 #define PN532_UART_TX_TIMEOUT_MS 1000U
 #define PN532_UART_WAKEUP_DELAY_US 5000U
 
-static const uint8_t pn532_uart_preamble[] = {0x55U, 0x55U, 0x00U, 0x00U, 0x00U};
+/*
+ * Long preamble retained for observed Elechouse V3 cold-start behavior.
+ * UM0701-02 Rev. 02, Section 7.2.11, p. 99 describes long-preamble wake-up.
+ */
+static const uint8_t PN532_UART_PREAMBLE[] = {0x55U, 0x55U, 0x00U, 0x00U, 0x00U};
 
 /*
  * UART wake-up only; does not configure or verify the PN532.
- * UM0701-02, Rev. 02, §7.2.11, p. 99: raw 0x55 followed by
- * the wake-up interval. See §6.3.2.3, p. 50 for oscillator startup.
+ * Wait for queued transmission to finish, send a raw 0x55, wait for its physical
+ * transmission to finish, then delay 5 ms. No ACK or response is read.
+ * UM0701-02, Rev. 02, §7.2.11, p. 99: raw 0x55 followed by the wake-up interval.
+ * See §6.3.2.3, p. 50 for oscillator startup.
  */
 static esp_err_t pn532_uart_start(PN532 *pn532)
 {
@@ -80,8 +95,9 @@ static esp_err_t pn532_uart_write_command(PN532 *pn532, const uint8_t *command, 
         return ESP_ERR_INVALID_ARG;
     }
 
+    /* Length validation bounds this stack allocation. */
     uint8_t cmd[PN532_UART_PREAMBLE_SIZE + PN532_FRAME_OVERHEAD + command_len];
-    (void)memcpy(cmd, pn532_uart_preamble, PN532_UART_PREAMBLE_SIZE);
+    (void)memcpy(cmd, PN532_UART_PREAMBLE, PN532_UART_PREAMBLE_SIZE);
 
     const size_t frame_len = pn532_command_framer(command, command_len, cmd + PN532_UART_PREAMBLE_SIZE);
     const size_t cmd_len = PN532_UART_PREAMBLE_SIZE + frame_len;
@@ -100,11 +116,17 @@ static esp_err_t pn532_uart_write_command(PN532 *pn532, const uint8_t *command, 
         return ESP_FAIL;
     }
 
+    /* Finish the queued transmission before the core starts its receive wait. */
     status = uart_wait_tx_done(pn532->uart.uart_port, tx_timeout_ticks);
 
     return status;
 }
 
+/*
+ * timeout is in RTOS ticks and is passed to uart_read_bytes(). The SDK can reuse
+ * that wait while accumulating partial data, so it is not a whole-call deadline.
+ * Report the actual count; the core detects short ACK, header, or body reads.
+ */
 static esp_err_t pn532_uart_read_response(PN532 *pn532, uint8_t *buffer, size_t buffer_size, size_t *bytes_read, TickType_t timeout)
 {
     assert((pn532 != NULL) &&
@@ -171,6 +193,7 @@ esp_err_t pn532_uart_init(PN532 *pn532, const PN532UartConfig *config)
     bool uart_driver_installed = false;
     if (status == ESP_OK)
     {
+        /* Reads are synchronous, so no UART event queue is needed. */
         status = uart_driver_install(config->uart_port, PN532_UART_RX_BUF_SIZE, PN532_UART_TX_BUF_SIZE, 0, NULL, 0);
         uart_driver_installed = (status == ESP_OK);
     }
